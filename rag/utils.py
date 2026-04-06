@@ -2,6 +2,8 @@ import os
 import pdfplumber
 import docx
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 def extract_text(file_path, file_extension):
     # Đọc file và rút trích toàn bộ văn bản
@@ -45,5 +47,16 @@ def process_document(file_path, file_extension):
     print(f"Đã băm file thành {len(chunks)} đoạn chunk")
     return chunks
 
+VECTOR_DB_PATH = "vector_store"
+
+def get_vector_store(chunks):
+    # Biễn chunks thành vector và lưu xuống ổ cứn bằng FAISS
+    print("Đang tải mô hình nhúng...")
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+
+    print("Đang chuyển đổi văn bản thành vector và nạp vào FAISS...")
+    vector_store = FAISS.from_texts(chunks, embedding=embeddings)
+
+    vector_store.save_local(VECTOR_DB_PATH)
 
 
