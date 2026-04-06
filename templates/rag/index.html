@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Lịch sử Chat</h5>
+            </div>
+            <div class="card-body">
+                <button class="btn btn-outline-primary w-100 mb-3"><i class="bi bi-plus-circle"></i> Cuộc hội thoại
+                    mới</button>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item text-muted">Chưa có lịch sử nào.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-9">
+        {% if messages %}
+        {% for message in messages %}
+        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}success{% endif %} alert-dismissible fade show shadow-sm"
+            role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+        {% endif %}
+        <div class="card shadow-sm mb-3">
+            <div class="card-body">
+                <h5 class="card-title"><i class="bi bi-cloud-arrow-up"></i> Tải tài liệu lên (PDF/DOCX)</h5>
+                <form action="" method="post" enctype="multipart/form-data"
+                    class="d-flex align-items-center gap-3 mt-3">
+                    {% csrf_token %}
+                    <input class="form-control" type="file" name="document" accept=".pdf,.docx" required>
+                    <button type="submit" class="btn btn-success"><i class="bi bi-upload"></i> Tải lên & Xử lý</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-body" style="height: 55vh; overflow-y: auto;">
+                <div class="text-center text-muted mt-5">
+                    <i class="bi bi-chat-dots" style="font-size: 3rem;"></i>
+                    <p>Hãy tải tài liệu lên và bắt đầu đặt câu hỏi cho Gemma 4!</p>
+                </div>
+            </div>
+            <div class="card-footer">
+                <div class="input-group">
+                    <input type="text" class="form-control" placeholder="Nhập câu hỏi của bạn..." disabled>
+                    <button class="btn btn-primary" type="button" disabled><i class="bi bi-send"></i> Gửi</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
