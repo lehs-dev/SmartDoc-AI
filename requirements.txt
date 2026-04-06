@@ -1,0 +1,13 @@
+# Web Framework
+Django>=4.2.0
+
+# LLM & RAG Framework
+langchain>=0.1.0
+langchain-community>=0.0.10
+
+# Vector Database
+faiss-cpu>=1.7.4
+
+# Xử lý tài liệu (PDF & DOCX)
+pdfplumber>=0.10.3
+python-docx>=1.1.0
