@@ -10,3 +10,7 @@ db.sqlite3
 *.log
 *.pot
 *.pyc
+/vector_store
+/.vscode
+/.idea
+/.DS_Store

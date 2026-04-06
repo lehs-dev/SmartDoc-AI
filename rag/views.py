@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from django.contrib import messages
 from .models import Document
-from .utils import process_document
+from .utils import process_document, get_vector_store
 
 def index(request):
     if request.method == 'POST':
@@ -19,6 +19,9 @@ def index(request):
             chunks = process_document(doc.file.path, doc.file_type)
 
             if chunks:
+                get_vector_store(chunks)
+                doc.is_embedded = True
+                doc.save()
                 messages.success(request, f'tải thành công: {doc.filename}. Hệ thống chia thành {len(chunks)} đoạn dữ liệu')
             else:
                 messages.warning(request, f'Đã tải file nhưng không tìm thấy dữ liệu')
