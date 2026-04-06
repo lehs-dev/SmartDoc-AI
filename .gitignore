@@ -5,3 +5,8 @@ __pycache__/
 /__pycache__
 *.py[cod]
 *$py.class
+/media
+db.sqlite3
+*.log
+*.pot
+*.pyc

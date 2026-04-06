@@ -18,6 +18,15 @@
     </div>
 
     <div class="col-md-9">
+        {% if messages %}
+        {% for message in messages %}
+        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}success{% endif %} alert-dismissible fade show shadow-sm"
+            role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endfor %}
+        {% endif %}
         <div class="card shadow-sm mb-3">
             <div class="card-body">
                 <h5 class="card-title"><i class="bi bi-cloud-arrow-up"></i> Tải tài liệu lên (PDF/DOCX)</h5>
