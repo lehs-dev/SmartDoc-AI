@@ -4,6 +4,8 @@ import docx
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from langchain_core.prompts import PromptTemplate
 
 def extract_text(file_path, file_extension):
     # Đọc file và rút trích toàn bộ văn bản
@@ -59,4 +61,36 @@ def get_vector_store(chunks):
 
     vector_store.save_local(VECTOR_DB_PATH)
 
+def ask_gemma(question):
+    print('Đang tìm kiếm thông tin cho câu hỏi...')
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+    vector_store = FAISS.load_local(VECTOR_DB_PATH, embeddings, allow_dangerous_deserialization=True)
+
+    retriever = vector_store.as_retriever(search_kwargs={'k' : 3})
+    relevant_doc = retriever.invoke(question)
+
+    context = "\n\n".join([doc.page_content for doc in relevant_doc])
+
+    prompt_template = """Bạn là một trợ lý AI thông minh tên là SmartDoc AI. 
+    Hãy trả lời câu hỏi của người dùng DỰA VÀO phần thông tin (Context) được trích xuất từ tài liệu bên dưới. 
+    Nếu thông tin không có trong Context, hãy nói "Tôi không tìm thấy thông tin này trong tài liệu", TUYỆT ĐỐI KHÔNG tự bịa ra câu trả lời.
+
+    Thông tin tài liệu (Context):
+    {context}
+
+    Câu hỏi của người dùng: {question}
+    
+    Trả lời:"""
+
+    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+    print('Đang chuyển thông tin cho Gemma4 xử lý...')
+    llm = OllamaLLM(model="gemma4:e2b")
+
+    chain = prompt | llm
+
+    answer = chain.invoke({"context" : context, "question" : question})
+
+    print('Đã có câu trả lời!')
+
+    return answer
 
