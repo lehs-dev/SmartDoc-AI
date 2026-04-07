@@ -71,9 +71,7 @@
                         {% if msg.role == 'user' %}<i class="bi bi-person"></i> Bạn{% else %}<i class="bi bi-robot"></i>
                         Gemma 4{% endif %}
                     </span>
-                    <div class="p-3 rounded-3 shadow-sm {% if msg.role == 'user' %}bg-light border{% else %}bg-success text-white{% endif %}"
-                        style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{
-                        msg.content }}</div>
+                    <div class="p-3 rounded-3 shadow-sm {% if msg.role == 'user' %}bg-light border{% else %}bg-success text-white{% endif %}" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{ msg.content }}</div>
                 </div>
                 {% endfor %}
                 {% endif %}

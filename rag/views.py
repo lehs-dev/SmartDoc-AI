@@ -46,7 +46,7 @@ def index(request):
         'current_session_id' : current_session_id,
         'current_messages' : current_messages,
     }
-    return render(request, 'rag/index.html')
+    return render(request, 'rag/index.html', context)
 
 def chat_api(request):
     # Nhận thông tin từ giao diện và trả về câu hỏi của gemma4
@@ -68,6 +68,7 @@ def chat_api(request):
             ChatMessage.objects.create(session=session, role='user', content=user_question)
             
             bot_answer = ask_gemma(user_question)
+            ChatMessage.objects.create(session=session, role='ai', content=bot_answer)
 
             return JsonResponse({'response' : bot_answer,
                                  'session_id' : session.id})
