@@ -1,6 +1,7 @@
 import os
 import pdfplumber
 import docx
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -25,7 +26,10 @@ def get_llm_model():
     global _llm_model
     if _llm_model is None:
         print("Khởi tạo kết nối tới Ollama...")
-        _llm_model = OllamaLLM(model="gemma4:e2b")
+    _llm_model = OllamaLLM(
+                model="gemma4:e2b",
+                callbacks=[StreamingStdOutCallbackHandler()]
+            )
     return _llm_model
 
 def get_cached_vector_store():
