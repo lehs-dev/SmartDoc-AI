@@ -59,19 +59,33 @@ def chat_api(request):
             if not user_question:
                 return JsonResponse({'error' : 'phải nhập câu hỏi'}, status=400)
             
+            # ... (phần đầu giữ nguyên)
             if session_id:
                 session = ChatSession.objects.get(id=session_id)
             else:
                 title = user_question[:30] + "..." if len(user_question) > 30 else user_question
                 session = ChatSession.objects.create(title=title)
             
+            # 🚀 LẤY TRÍ NHỚ: Rút 6 tin nhắn gần nhất (trước khi lưu tin mới)
+            past_messages = ChatMessage.objects.filter(session=session).order_by('-created_at')[:6]
+            # Lật ngược lại để chat cũ nằm trên, chat mới nằm dưới
+            past_messages = reversed(list(past_messages))
+            
+            chat_history_text = ""
+            for msg in past_messages:
+                role_name = "Người dùng" if msg.role == 'user' else "SmartDoc AI"
+                chat_history_text += f"{role_name}: {msg.content}\n"
+
+            # Lưu câu hỏi mới của User
             ChatMessage.objects.create(session=session, role='user', content=user_question)
             
-            bot_answer = ask_gemma(user_question)
+            # 🚀 Truyền thêm chat_history_text vào
+            bot_answer = ask_gemma(user_question, chat_history_text)
+
+            # Lưu câu trả lời của AI
             ChatMessage.objects.create(session=session, role='ai', content=bot_answer)
 
-            return JsonResponse({'response' : bot_answer,
-                                 'session_id' : session.id})
+            return JsonResponse({'response' : bot_answer, 'session_id' : session.id})
         
         except Exception as e :
             return JsonResponse({'error' : str(e)}, status=500)

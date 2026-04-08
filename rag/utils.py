@@ -46,7 +46,7 @@ def extract_text(file_path, file_extension):
 
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1111,
+        chunk_size=300,
         chunk_overlap=50,
         length_function=len,
     )
@@ -71,35 +71,27 @@ def get_vector_store(chunks):
     vector_store = FAISS.from_texts(chunks, embedding=embeddings)
     vector_store.save_local(VECTOR_DB_PATH)
 
-def ask_gemma(question):
+def ask_gemma(question, chat_histoty=""):
     print('Đang tìm kiếm thông tin cho câu hỏi...')
     embeddings = get_embeddings_model()
     vector_store = FAISS.load_local(VECTOR_DB_PATH, embeddings, allow_dangerous_deserialization=True)
-
     retriever = vector_store.as_retriever(search_kwargs={'k' : 3})
     relevant_doc = retriever.invoke(question)
-
     context  = "\n\n".join([doc.page_content for doc in relevant_doc])
-
-    prompt_template =  """Bạn là một trợ lý AI thông minh tên là SmartDoc AI. 
+    prompt_template ="""
+    Bạn là một trợ lý AI thông minh tên là SmartDoc AI. 
+    Dưới đây là lịch sử cuộc trò chuyện gần đây của bạn với người dùng:
+    {chat_history}
     Hãy trả lời câu hỏi của người dùng DỰA VÀO phần thông tin (Context) được trích xuất từ tài liệu bên dưới. 
-    Nếu thông tin không có trong Context, hãy nói "Tôi không tìm thấy thông tin này trong tài liệu, thưa chủ nhân <3", TUYỆT ĐỐI KHÔNG tự bịa ra câu trả lời.
-
+    Nếu thông tin không có trong Context, hãy nói "Tôi không tìm thấy thông tin này trong tài liệu", TUYỆT ĐỐI KHÔNG tự bịa ra câu trả lời.
     Thông tin tài liệu (Context):
     {context}
-
-    Câu hỏi của người dùng: {question}
-    
-    Trả lời:"""
-
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-
+    Câu hỏi hiện tại của người dùng: {question}
+    Trả lời:
+    """
+    prompt = PromptTemplate(template=prompt_template, input_variables=["chat_history" ,"context", "question"])
     print('Gemma 4 đang xử lý câu hỏi')
-
     llm = get_llm_model()
-
     chain = prompt | llm
-
-    answer = chain.invoke({"context" : context, "question" : question})
-
+    answer = chain.invoke({"chat_history" : chat_histoty ,"context" : context, "question" : question})
     return answer
