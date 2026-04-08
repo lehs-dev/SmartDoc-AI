@@ -3,7 +3,7 @@ from django.contrib import messages
 from .models import Document, ChatSession, ChatMessage
 from .utils import process_document, get_vector_store, ask_gemma
 import json
-from django.http import JsonResponse
+from django.http import JsonResponse, StreamingHttpResponse
 
 def index(request):
     sessions = ChatSession.objects.all().order_by('-created_at')
@@ -59,14 +59,13 @@ def chat_api(request):
             if not user_question:
                 return JsonResponse({'error' : 'phải nhập câu hỏi'}, status=400)
             
-            # ... (phần đầu giữ nguyên)
             if session_id:
                 session = ChatSession.objects.get(id=session_id)
             else:
                 title = user_question[:30] + "..." if len(user_question) > 30 else user_question
                 session = ChatSession.objects.create(title=title)
             
-            # 🚀 LẤY TRÍ NHỚ: Rút 6 tin nhắn gần nhất (trước khi lưu tin mới)
+            # LẤY TRÍ NHỚ: Rút 6 tin nhắn gần nhất (trước khi lưu tin mới)
             past_messages = ChatMessage.objects.filter(session=session).order_by('-created_at')[:6]
             # Lật ngược lại để chat cũ nằm trên, chat mới nằm dưới
             past_messages = reversed(list(past_messages))
@@ -79,14 +78,22 @@ def chat_api(request):
             # Lưu câu hỏi mới của User
             ChatMessage.objects.create(session=session, role='user', content=user_question)
             
-            # 🚀 Truyền thêm chat_history_text vào
-            bot_answer = ask_gemma(user_question, chat_history_text)
+            # Truyền thêm chat_history_text vào
+            stream_response = ask_gemma(user_question, chat_history_text)
 
-            # Lưu câu trả lời của AI
-            ChatMessage.objects.create(session=session, role='ai', content=bot_answer)
+            def generate_stream():
+                full_answer = ""
+                for chunk in stream_response:
+                    full_answer += chunk
+                    yield chunk
 
-            return JsonResponse({'response' : bot_answer, 'session_id' : session.id})
-        
+                # Lưu câu trả lời của AI
+                ChatMessage.objects.create(session=session, role='ai', content=full_answer)
+
+            response = StreamingHttpResponse(generate_stream(), content_type = "text/plain")
+            response['X_Session_Id']=session.id
+            return response
+
         except Exception as e :
             return JsonResponse({'error' : str(e)}, status=500)
         

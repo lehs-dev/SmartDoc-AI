@@ -1,9 +1,10 @@
 import os
 import pdfplumber
 import docx
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import OllamaEmbeddings
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 
@@ -12,20 +13,35 @@ VECTOR_DB_PATH = "vector_store"
 
 _embeddings_model = None
 _llm_model = None
+_vector_store = None # Thêm biến cache cho Database
 
 def get_embeddings_model():
     global _embeddings_model
     if _embeddings_model is None:
         print("Đang nạp embedding model vào ram...")
-        _embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+        _embeddings_model = OllamaEmbeddings(model="nomic-embed-text")
     return _embeddings_model
 
 def get_llm_model():
     global _llm_model
     if _llm_model is None:
         print("Khởi tạo kết nối tới Ollama...")
-        _llm_model = OllamaLLM(model="gemma4:e2b")
+    _llm_model = OllamaLLM(
+                model="gemma4:e2b",
+                callbacks=[StreamingStdOutCallbackHandler()]
+            )
     return _llm_model
+
+def get_cached_vector_store():
+    """Hàm này giúp chỉ load FAISS từ ổ cứng 1 lần duy nhất"""
+    global _vector_store
+    if _vector_store is None:
+        print("Đang nạp Vector Database vào RAM...")
+        embeddings = get_embeddings_model()
+        if os.path.exists(os.path.join(VECTOR_DB_PATH, "index.faiss")):
+            _vector_store = FAISS.load_local(VECTOR_DB_PATH, embeddings, allow_dangerous_deserialization=True)
+    return _vector_store
+
 
 def extract_text(file_path, file_extension):
     text = ""
@@ -46,7 +62,7 @@ def extract_text(file_path, file_extension):
 
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300,
+        chunk_size=1111,
         chunk_overlap=50,
         length_function=len,
     )
@@ -66,32 +82,59 @@ def process_document(file_path, file_extension):
     return chunks
 
 def get_vector_store(chunks):
+    global _vector_store
     print("vectorize document...")
     embeddings = get_embeddings_model()
-    vector_store = FAISS.from_texts(chunks, embedding=embeddings)
-    vector_store.save_local(VECTOR_DB_PATH)
+    
+    # Logic nạp dồn tài liệu (Không xóa cũ)
+    index_path = os.path.join(VECTOR_DB_PATH, "index.faiss")
+    if os.path.exists(index_path):
+        _vector_store = FAISS.load_local(VECTOR_DB_PATH, embeddings, allow_dangerous_deserialization=True)
+        _vector_store.add_texts(chunks)
+    else:
+        _vector_store = FAISS.from_texts(chunks, embedding=embeddings)
+        
+    _vector_store.save_local(VECTOR_DB_PATH)
 
-def ask_gemma(question, chat_histoty=""):
+def ask_gemma(question, chat_history=""):
     print('Đang tìm kiếm thông tin cho câu hỏi...')
-    embeddings = get_embeddings_model()
-    vector_store = FAISS.load_local(VECTOR_DB_PATH, embeddings, allow_dangerous_deserialization=True)
-    retriever = vector_store.as_retriever(search_kwargs={'k' : 3})
+    
+    # Dùng DB đã cache trong RAM thay vì đọc ổ cứng
+    vector_store = get_cached_vector_store()
+
+    if vector_store is None:
+        return "Xin lỗi, tôi chưa được nạp tài liệu nào. Vui lòng tải tài liệu lên trước."
+
+    # GIẢM TẢI CHO CPU: Chỉ lấy 2 đoạn văn bản liên quan nhất (thay vì 3) để Prompt ngắn lại
+    retriever = vector_store.as_retriever(search_kwargs={'k' : 2})
     relevant_doc = retriever.invoke(question)
+
     context  = "\n\n".join([doc.page_content for doc in relevant_doc])
-    prompt_template ="""
-    Bạn là một trợ lý AI thông minh tên là SmartDoc AI. 
-    Dưới đây là lịch sử cuộc trò chuyện gần đây của bạn với người dùng:
-    {chat_history}
-    Hãy trả lời câu hỏi của người dùng DỰA VÀO phần thông tin (Context) được trích xuất từ tài liệu bên dưới. 
-    Nếu thông tin không có trong Context, hãy nói "Tôi không tìm thấy thông tin này trong tài liệu", TUYỆT ĐỐI KHÔNG tự bịa ra câu trả lời.
-    Thông tin tài liệu (Context):
-    {context}
-    Câu hỏi hiện tại của người dùng: {question}
-    Trả lời:
-    """
+
+    prompt_template =  """Bạn là trợ lý AI tên SmartDoc AI.
+Lịch sử chat:
+{chat_history}
+
+Thông tin tài liệu:
+{context}
+
+Câu hỏi: {question}
+Trả lời:"""
+
     prompt = PromptTemplate(template=prompt_template, input_variables=["chat_history" ,"context", "question"])
-    print('Gemma 4 đang xử lý câu hỏi')
+
+    print('Gemma 4 đang suy nghĩ...')
     llm = get_llm_model()
     chain = prompt | llm
-    answer = chain.invoke({"chat_history" : chat_histoty ,"context" : context, "question" : question})
-    return answer
+
+    # answer = chain.invoke({
+    #     "chat_history": chat_history, 
+    #     "context" : context, 
+    #     "question" : question
+    # })
+
+    return chain.stream({
+        "chat_history": chat_history, 
+        "context" : context, 
+        "question" : question
+    })
