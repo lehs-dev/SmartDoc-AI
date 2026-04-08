@@ -7,17 +7,33 @@
             <div class="card-header bg-primary text-white">
                 <h5 class="mb-0"><i class="bi bi-clock-history"></i> Lịch sử Chat</h5>
             </div>
-            <div class="card-body">
-                <button class="btn btn-outline-primary w-100 mb-3"><i class="bi bi-plus-circle"></i> Cuộc hội thoại
-                    mới</button>
-                <ul class="list-group list-group-flush">
-                    <li class="list-group-item text-muted">Chưa có lịch sử nào.</li>
+            <div class="card-body p-0">
+                <div class="p-3 border-bottom">
+                    <a href="/" class="btn btn-outline-primary w-100"><i class="bi bi-plus-circle"></i> Cuộc hội thoại
+                        mới</a>
+                </div>
+                <ul class="list-group list-group-flush" style="max-height: 75vh; overflow-y: auto;">
+                    {% for s in sessions %}
+                    <a href="/?session={{ s.id }}"
+                        class="list-group-item list-group-item-action {% if current_session_id == s.id|stringformat:'s' %}active{% endif %}">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1 text-truncate" style="max-width: 90%;">{{ s.title }}</h6>
+                        </div>
+                        <small
+                            class="{% if current_session_id == s.id|stringformat:'s' %}text-white{% else %}text-muted{% endif %}">
+                            {{ s.created_at|date:"d/m/Y H:i" }}
+                        </small>
+                    </a>
+                    {% empty %}
+                    <li class="list-group-item text-muted text-center py-4">Chưa có lịch sử nào.</li>
+                    {% endfor %}
                 </ul>
             </div>
         </div>
     </div>
 
     <div class="col-md-9">
+
         {% if messages %}
         {% for message in messages %}
         <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}success{% endif %} alert-dismissible fade show shadow-sm"
@@ -27,6 +43,7 @@
         </div>
         {% endfor %}
         {% endif %}
+
         <div class="card shadow-sm mb-3">
             <div class="card-body">
                 <h5 class="card-title"><i class="bi bi-cloud-arrow-up"></i> Tải tài liệu lên (PDF/DOCX)</h5>
@@ -41,15 +58,31 @@
 
         <div class="card shadow-sm">
             <div class="card-body" id="chat-window" style="height: 55vh; overflow-y: auto;">
+
+                {% if not current_messages %}
                 <div class="text-center text-muted mt-5" id="empty-chat-msg">
                     <i class="bi bi-chat-dots" style="font-size: 3rem;"></i>
                     <p>Hãy tải tài liệu lên và bắt đầu đặt câu hỏi cho Gemma 4!</p>
                 </div>
+                {% else %}
+                {% for msg in current_messages %}
+                <div class="mb-3 {% if msg.role == 'user' %}text-end{% else %}text-start{% endif %}">
+                    <span class="badge {% if msg.role == 'user' %}bg-primary{% else %}bg-success{% endif %} mb-1">
+                        {% if msg.role == 'user' %}<i class="bi bi-person"></i> Bạn{% else %}<i class="bi bi-robot"></i>
+                        Gemma 4{% endif %}
+                    </span>
+                    <div class="p-3 rounded-3 shadow-sm {% if msg.role == 'user' %}bg-light border{% else %}bg-success text-white{% endif %}" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{ msg.content }}</div>
+                </div>
+                {% endfor %}
+                {% endif %}
+
             </div>
-            <div class="card-footer">
+            <div class="card-footer bg-white border-0 p-3">
                 <div class="input-group">
-                    <input type="text" id="chat-input" class="form-control" placeholder="Nhập câu hỏi của bạn...">
-                    <button class="btn btn-primary" id="send-btn" type="button"><i class="bi bi-send"></i> Gửi</button>
+                    <input type="text" id="chat-input" class="form-control form-control-lg"
+                        placeholder="Nhập câu hỏi của bạn...">
+                    <button class="btn btn-primary px-4" id="send-btn" type="button"><i class="bi bi-send"></i>
+                        Gửi</button>
                 </div>
             </div>
         </div>
@@ -62,41 +95,38 @@
         const chatInput = document.getElementById('chat-input');
         const sendBtn = document.getElementById('send-btn');
         const emptyMsg = document.getElementById('empty-chat-msg');
-
-        // Lấy CSRF token từ form upload ở trên (Django bảo mật cần cái này)
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
 
-        // Hàm tạo bong bóng chat
+        // Cuộn xuống cuối ngay khi vừa load trang
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+
+        // Biến lưu ID của hội thoại hiện tại (lấy từ Django gán xuống)
+        let currentSessionId = "{{ current_session_id|default_if_none:'' }}";
+
         function appendMessage(sender, text) {
-            if (emptyMsg) emptyMsg.style.display = 'none'; // Ẩn lời chào
+            if (emptyMsg) emptyMsg.style.display = 'none';
 
             const msgDiv = document.createElement('div');
             msgDiv.className = `mb-3 ${sender === 'user' ? 'text-end' : 'text-start'}`;
-
             const isUser = sender === 'user';
             msgDiv.innerHTML = `
             <span class="badge ${isUser ? 'bg-primary' : 'bg-success'} mb-1">
                 ${isUser ? '<i class="bi bi-person"></i> Bạn' : '<i class="bi bi-robot"></i> Gemma 4'}
             </span>
-            <div class="p-3 rounded-3 shadow-sm ${isUser ? 'bg-light border' : 'bg-success text-white'}" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">
-                ${text}
-            </div>
+            <div class="p-3 rounded-3 shadow-sm ${isUser ? 'bg-light border' : 'bg-success text-white'}" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">${text}</div>
         `;
             chatWindow.appendChild(msgDiv);
-            chatWindow.scrollTop = chatWindow.scrollHeight; // Tự cuộn xuống cuối
+            chatWindow.scrollTop = chatWindow.scrollHeight;
         }
 
-        // Hàm gửi tin nhắn
         async function sendMessage() {
             const text = chatInput.value.trim();
             if (!text) return;
 
-            // 1. Khóa input và hiện tin nhắn của mình
             chatInput.value = '';
             sendBtn.disabled = true;
             appendMessage('user', text);
 
-            // 2. Hiện trạng thái Gemma đang gõ
             const typingId = 'typing-' + Date.now();
             const typingDiv = document.createElement('div');
             typingDiv.id = typingId;
@@ -106,24 +136,28 @@
             chatWindow.scrollTop = chatWindow.scrollHeight;
 
             try {
-                // 3. Gửi lên cổng API vừa tạo ở Bước 1
                 const response = await fetch('/chat/', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'X-CSRFToken': csrfToken
                     },
-                    body: JSON.stringify({ message: text })
+                    // Gửi kèm ID session hiện tại để Backend biết đang chat tiếp vào đâu
+                    body: JSON.stringify({ message: text, session_id: currentSessionId })
                 });
 
                 const data = await response.json();
-
-                // Xóa dòng "đang gõ"
                 document.getElementById(typingId).remove();
 
-                // 4. In câu trả lời của Gemma ra màn hình
                 if (response.ok) {
                     appendMessage('bot', data.response);
+
+                    // Nếu đây là tin nhắn đầu tiên, cập nhật ID và ghim lên URL
+                    if (data.session_id && !currentSessionId) {
+                        currentSessionId = data.session_id;
+                        window.history.pushState({}, '', '/?session=' + currentSessionId);
+                        // Có thể tạo hiệu ứng reload sidebar chỗ này (tạm thời để F5 mới thấy ở sidebar cho đỡ phức tạp)
+                    }
                 } else {
                     appendMessage('bot', '❌ Lỗi: ' + data.error);
                 }
@@ -136,7 +170,6 @@
             chatInput.focus();
         }
 
-        // Bắt sự kiện click chuột hoặc ấn phím Enter
         sendBtn.addEventListener('click', sendMessage);
         chatInput.addEventListener('keypress', function (e) {
             if (e.key === 'Enter') sendMessage();
