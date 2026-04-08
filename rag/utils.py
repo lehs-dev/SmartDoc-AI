@@ -4,7 +4,7 @@ import docx
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import OllamaEmbeddings
 from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 
@@ -19,7 +19,7 @@ def get_embeddings_model():
     global _embeddings_model
     if _embeddings_model is None:
         print("Đang nạp embedding model vào ram...")
-        _embeddings_model = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
+        _embeddings_model = OllamaEmbeddings(model="nomic-embed-text")
     return _embeddings_model
 
 def get_llm_model():
@@ -127,10 +127,14 @@ Trả lời:"""
     llm = get_llm_model()
     chain = prompt | llm
 
-    answer = chain.invoke({
+    # answer = chain.invoke({
+    #     "chat_history": chat_history, 
+    #     "context" : context, 
+    #     "question" : question
+    # })
+
+    return chain.stream({
         "chat_history": chat_history, 
         "context" : context, 
         "question" : question
     })
-
-    return answer

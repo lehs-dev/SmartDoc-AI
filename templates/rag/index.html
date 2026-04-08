@@ -142,24 +142,47 @@
                         'Content-Type': 'application/json',
                         'X-CSRFToken': csrfToken
                     },
-                    // Gửi kèm ID session hiện tại để Backend biết đang chat tiếp vào đâu
                     body: JSON.stringify({ message: text, session_id: currentSessionId })
                 });
 
-                const data = await response.json();
                 document.getElementById(typingId).remove();
 
                 if (response.ok) {
-                    appendMessage('bot', data.response);
-
-                    // Nếu đây là tin nhắn đầu tiên, cập nhật ID và ghim lên URL
-                    if (data.session_id && !currentSessionId) {
-                        currentSessionId = data.session_id;
+                    // 👇 Xử lý Session ID ẩn trong header
+                    const newSessionId = response.headers.get('X-Session-Id');
+                    if (newSessionId && !currentSessionId) {
+                        currentSessionId = newSessionId;
                         window.history.pushState({}, '', '/?session=' + currentSessionId);
-                        // Có thể tạo hiệu ứng reload sidebar chỗ này (tạm thời để F5 mới thấy ở sidebar cho đỡ phức tạp)
                     }
+
+                    // 👇 Tạo sẵn một cái bong bóng chat trống của Gemma
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = 'mb-3 text-start';
+                    msgDiv.innerHTML = `
+                        <span class="badge bg-success mb-1"><i class="bi bi-robot"></i> Gemma 4</span>
+                        <div class="p-3 rounded-3 shadow-sm bg-success text-white ai-content" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;"></div>
+                    `;
+                    chatWindow.appendChild(msgDiv);
+
+                    const contentBox = msgDiv.querySelector('.ai-content');
+
+                    // 👇 HỨNG TỪNG CHỮ NHẢ VÀO BONG BÓNG
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder('utf-8');
+                    let aiText = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break; // AI ngưng nói thì dừng
+
+                        aiText += decoder.decode(value, { stream: true });
+                        contentBox.textContent = aiText; // In trực tiếp ra web
+                        chatWindow.scrollTop = chatWindow.scrollHeight; // Cuộn theo chữ
+                    }
+
                 } else {
-                    appendMessage('bot', '❌ Lỗi: ' + data.error);
+                    const errorData = await response.json();
+                    appendMessage('bot', '❌ Lỗi: ' + errorData.error);
                 }
             } catch (error) {
                 document.getElementById(typingId).remove();
