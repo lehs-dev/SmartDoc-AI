@@ -92,7 +92,8 @@
                         <label class="form-label mb-1" for="llm-model">Mô hình LLM</label>
                         <select id="llm-model" class="form-select">
                             {% for model in llm_models %}
-                            <option value="{{ model }}" {% if model==default_llm_model %}selected{% endif %}>{{ model }}
+                            <option value="{{ model }}" {% if model==default_llm_model %}selected{% endif %}>
+                                {{ model }}
                             </option>
                             {% endfor %}
                         </select>
