@@ -1,105 +1,116 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-3">
-        <div class="card shadow-sm h-100">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Lịch sử Chat</h5>
-            </div>
-            <div class="card-body p-0">
-                <div class="p-3 border-bottom">
-                    <a href="/" class="btn btn-outline-primary w-100"><i class="bi bi-plus-circle"></i> Cuộc hội thoại
-                        mới</a>
-                </div>
-                <ul class="list-group list-group-flush" style="max-height: 75vh; overflow-y: auto;">
-                    {% for s in sessions %}
-                    <a href="/?session={{ s.id }}"
-                        class="list-group-item list-group-item-action {% if current_session_id == s.id|stringformat:'s' %}active{% endif %}">
-                        <div class="d-flex w-100 justify-content-between">
-                            <h6 class="mb-1 text-truncate" style="max-width: 90%;">{{ s.title }}</h6>
-                        </div>
-                        <small
-                            class="{% if current_session_id == s.id|stringformat:'s' %}text-white{% else %}text-muted{% endif %}">
-                            {{ s.created_at|date:"d/m/Y H:i" }}
-                        </small>
-                    </a>
-                    {% empty %}
-                    <li class="list-group-item text-muted text-center py-4">Chưa có lịch sử nào.</li>
-                    {% endfor %}
-                </ul>
-            </div>
+<div id="app-toast-container" class="app-toast-container" aria-live="polite" aria-atomic="true"></div>
+
+<div id="delete-confirm-dialog" class="confirm-overlay" aria-hidden="true">
+    <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title"
+        aria-describedby="delete-confirm-desc">
+        <h3 id="delete-confirm-title" class="confirm-title">Xóa đoạn chat?</h3>
+        <p class="confirm-main">Hành động này sẽ xóa <strong id="delete-confirm-target">hội thoại này</strong></p>
+        <p id="delete-confirm-desc" class="confirm-sub">Bạn sẽ mất toàn bộ nội dung trong đoạn chat này.</p>
+        <div class="confirm-actions">
+            <button type="button" id="delete-confirm-cancel" class="btn confirm-cancel-btn">Hủy bỏ</button>
+            <button type="button" id="delete-confirm-ok" class="btn confirm-delete-btn">Xóa</button>
         </div>
     </div>
+</div>
 
-    <div class="col-md-9">
+{% if messages %}
+<div id="server-message-seed" class="d-none">
+    {% for message in messages %}
+    <div class="message-seed-item"
+        data-level="{% if 'error' in message.tags %}danger{% elif 'warning' in message.tags %}warning{% elif 'info' in message.tags %}info{% else %}success{% endif %}"
+        data-text="{{ message|escapejs }}"></div>
+    {% endfor %}
+</div>
+{% endif %}
 
-        {% if messages %}
-        {% for message in messages %}
-        <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}success{% endif %} alert-dismissible fade show shadow-sm"
-            role="alert">
-            {{ message }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-        </div>
-        {% endfor %}
-        {% endif %}
+<div class="row g-3 g-xl-4 align-items-stretch">
+    <aside class="col-12 col-lg-4 col-xl-3">
+        <section class="glass-panel sidebar-panel h-100">
+            <div class="section-title-wrap">
+                <div class="section-title-head">
+                    <h2 class="section-title"><i class="bi bi-clock-history"></i> Lịch sử trò chuyện</h2>
+                </div>
+                <p class="section-subtitle">Theo dõi phiên hỏi đáp theo từng tài liệu đã nạp.</p>
+            </div>
 
-        <div class="card shadow-sm mb-3">
-            <div class="card-body">
-                <h5 class="card-title"><i class="bi bi-cloud-arrow-up"></i> Tải tài liệu lên (PDF/DOCX)</h5>
-                <form action="" method="post" enctype="multipart/form-data"
-                    class="d-flex align-items-center gap-3 mt-3 flex-wrap">
-                    {% csrf_token %}
-                    <input class="form-control" type="file" name="document" accept=".pdf,.docx" required>
-                    <div class="form-check">
+            <div class="history-toolbar">
+                <a href="/" class="btn new-chat-btn w-100"><i class="bi bi-plus-circle"></i> Cuộc hội thoại mới</a>
+            </div>
+
+            <div class="history-list" role="list" id="history-list">
+                {% for s in sessions %}
+                <div class="session-row {% if current_session_id == s.id|stringformat:'s' %}is-active{% endif %}" data-session-id="{{ s.id }}">
+                    <a href="/?session={{ s.id }}"
+                        class="session-item {% if current_session_id == s.id|stringformat:'s' %}active{% endif %}">
+                        <span class="session-title">{{ s.title }}</span>
+                        <span class="session-time">{{ s.created_at|date:"d/m/Y H:i" }}</span>
+                    </a>
+                    <button type="button" class="btn session-delete-btn" data-session-id="{{ s.id }}" data-session-title="{{ s.title|escape }}"
+                        aria-label="Xóa hội thoại" title="Xóa hội thoại">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+                {% empty %}
+                <div class="session-empty" id="session-empty">Chưa có lịch sử chat.</div>
+                {% endfor %}
+            </div>
+        </section>
+    </aside>
+
+    <section class="col-12 col-lg-8 col-xl-9 d-flex flex-column gap-3 workspace-main-col">
+        <section class="glass-panel upload-panel">
+            <div class="section-title-wrap">
+                <h2 class="section-title" style="font-size: 1.5rem;">Smartdoc-AI</h2>
+            </div>
+
+            <form action="" method="post" enctype="multipart/form-data" class="upload-form">
+                {% csrf_token %}
+                <div class="upload-file">
+                    <div class="upload-file-head">
+                        <label for="document-input" class="form-label">Chọn tài liệu</label>
+                        <span class="upload-inline-note">Tải PDF/DOCX để tạo ngữ cảnh RAG trước khi đặt câu hỏi.</span>
+                    </div>
+                    <input id="document-input" class="form-control" type="file" name="document" accept=".pdf,.docx"
+                        required>
+                </div>
+
+                <div class="upload-actions">
+                    <div class="form-check upload-check">
                         <input class="form-check-input" type="checkbox" value="on" name="has_vietnamese"
                             id="has-vietnamese">
-                        <label class="form-check-label" for="has-vietnamese">
-                            Tài liệu có tiếng Việt
-                        </label>
+                        <label class="form-check-label" for="has-vietnamese">Tài liệu có tiếng Việt</label>
                     </div>
-                    <button type="submit" class="btn btn-success"><i class="bi bi-upload"></i> Tải lên & Xử lý</button>
-                </form>
-            </div>
-        </div>
-
-        <div class="card shadow-sm">
-            <div class="card-body" id="chat-window" style="height: 55vh; overflow-y: auto;">
-
-                {% if not current_messages %}
-                <div class="text-center text-muted mt-5" id="empty-chat-msg">
-                    <i class="bi bi-chat-dots" style="font-size: 3rem;"></i>
-                    <p>Hãy tải tài liệu lên và bắt đầu đặt câu hỏi cho Gemma 4!</p>
+                    <button type="submit" class="btn btn-success upload-button"><i class="bi bi-upload"></i> Tải lên & Xử
+                        lý</button>
                 </div>
-                {% else %}
-                {% for msg in current_messages %}
-                <div class="mb-3 {% if msg.role == 'user' %}text-end{% else %}text-start{% endif %}">
-                    <span class="badge {% if msg.role == 'user' %}bg-primary{% else %}bg-success{% endif %} mb-1">
-                        {% if msg.role == 'user' %}<i class="bi bi-person"></i> Bạn{% else %}<i class="bi bi-robot"></i>
-                        Gemma 4{% endif %}
-                    </span>
-                    <div class="p-3 rounded-3 shadow-sm {% if msg.role == 'user' %}bg-light border{% else %}bg-success text-white{% endif %}"
-                        style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{msg.content }}</div>
-                </div>
-                {% endfor %}
-                {% endif %}
+            </form>
+        </section>
 
-            </div>
-            <div class="card-footer bg-white border-0 p-3">
-                <div class="row g-2 mb-2">
-                    <div class="col-md-4">
-                        <label class="form-label mb-1" for="llm-model">Mô hình LLM</label>
-                        <select id="llm-model" class="form-select">
+        <section class="glass-panel chat-panel">
+            <div class="chat-panel-header">
+                <div>
+                    <h2 class="chat-panel-title"><i class="bi bi-chat-left-text"></i> Trợ lý đọc hiểu tài liệu</h2>
+                    <p class="chat-panel-subtitle" id="active-doc-hint">Hãy chọn tài liệu để bắt đầu hỏi đáp theo nội dung đã
+                        nhúng.</p>
+                </div>
+
+                <div class="chat-meta-grid">
+                    <div class="meta-field">
+                        <label for="llm-model" class="form-label">Mô hình LLM</label>
+                        <select id="llm-model" class="form-select custom-select">
                             {% for model in llm_models %}
-                            <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>
-                                {{ model }}
+                            <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>{{ model }}
                             </option>
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-8">
-                        <label class="form-label mb-1" for="document-select">Tài liệu đang hỏi</label>
-                        <select id="document-select" class="form-select" {% if not embedded_documents %}disabled{% endif %}>
+
+                    <div class="meta-field">
+                        <label for="document-select" class="form-label">Tài liệu đang hỏi</label>
+                        <select id="document-select" class="form-select custom-select" {% if not embedded_documents %}disabled{% endif %}>
                             {% for doc in embedded_documents %}
                             <option value="{{ doc.id }}" {% if current_document_id == doc.id|stringformat:'s' %}selected{% endif %}>
                                 {{ doc.filename }} | {{ doc.embedding_model }} | {{ doc.vector_db_key }}
@@ -110,15 +121,43 @@
                         </select>
                     </div>
                 </div>
-                <div class="input-group">
-                    <input type="text" id="chat-input" class="form-control form-control-lg"
-                        placeholder="Nhập câu hỏi của bạn...">
-                    <button class="btn btn-primary px-4" id="send-btn" type="button"><i class="bi bi-send"></i>
-                        Gửi</button>
+            </div>
+
+            <div class="chat-window" id="chat-window">
+                {% if not current_messages %}
+                <div class="chat-empty" id="empty-chat-msg">
+                    <i class="bi bi-journal-text"></i>
+                    <p class="mb-1 fw-semibold">Chưa có nội dung hội thoại.</p>
+                    <p class="mb-0">Tải tài liệu, chọn tài liệu đang hỏi rồi nhập câu hỏi để nhận câu trả lời theo ngữ cảnh.
+                    </p>
+                </div>
+                {% else %}
+                {% for msg in current_messages %}
+                <div class="message-row {% if msg.role == 'user' %}is-user{% else %}is-ai{% endif %}">
+                    <div class="message-bubble {% if msg.role == 'user' %}user-bubble{% else %}ai-bubble{% endif %}">
+                        <div class="message-meta">
+                            {% if msg.role == 'user' %}
+                            <i class="bi bi-person"></i> Bạn
+                            {% else %}
+                            <i class="bi bi-robot"></i> SmartDoc AI
+                            {% endif %}
+                        </div>
+                        <p class="message-text">{{ msg.content }}</p>
+                    </div>
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+
+            <div class="chat-composer">
+                <div class="input-group composer-group">
+                    <input type="text" id="chat-input" class="form-control chat-input"
+                        placeholder="Ví dụ: Tóm tắt mục tiêu chính trong tài liệu này...">
+                    <button class="btn send-btn" id="send-btn" type="button"><i class="bi bi-send"></i> Gửi</button>
                 </div>
             </div>
-        </div>
-    </div>
+        </section>
+    </section>
 </div>
 
 <script>
@@ -129,44 +168,334 @@
         const emptyMsg = document.getElementById('empty-chat-msg');
         const llmModelSelect = document.getElementById('llm-model');
         const documentSelect = document.getElementById('document-select');
-        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        const activeDocHint = document.getElementById('active-doc-hint');
+        const historyList = document.getElementById('history-list');
+        const toastContainer = document.getElementById('app-toast-container');
+        const deleteConfirmDialog = document.getElementById('delete-confirm-dialog');
+        const deleteConfirmTarget = document.getElementById('delete-confirm-target');
+        const deleteConfirmCancel = document.getElementById('delete-confirm-cancel');
+        const deleteConfirmOk = document.getElementById('delete-confirm-ok');
+        const messageSeed = document.getElementById('server-message-seed');
+        const csrfInput = document.querySelector('[name=csrfmiddlewaretoken]');
+        const csrfToken = csrfInput ? csrfInput.value : '';
+        let toastTimer = null;
+        let deleteConfirmResolver = null;
+        let deleteConfirmLastFocus = null;
 
-        // Cuộn xuống cuối ngay khi vừa load trang
-        chatWindow.scrollTop = chatWindow.scrollHeight;
-
-        // Biến lưu ID của hội thoại hiện tại (lấy từ Django gán xuống)
         let currentSessionId = "{{ current_session_id|default_if_none:'' }}";
 
-        function appendMessage(sender, text) {
-            if (emptyMsg) emptyMsg.style.display = 'none';
+        function showToast(text, level) {
+            if (!toastContainer || !text) {
+                return;
+            }
 
-            const msgDiv = document.createElement('div');
+            if (toastTimer) {
+                clearTimeout(toastTimer);
+                toastTimer = null;
+            }
+
+            const iconMap = {
+                success: 'bi-check-circle',
+                danger: 'bi-exclamation-circle',
+                warning: 'bi-exclamation-triangle',
+                info: 'bi-info-circle'
+            };
+
+            const toastLevel = iconMap[level] ? level : 'info';
+            const iconClass = iconMap[toastLevel];
+
+            toastContainer.innerHTML = '';
+
+            const toast = document.createElement('div');
+            toast.className = `app-toast app-toast-${toastLevel}`;
+            toast.innerHTML = `<i class="bi ${iconClass}"></i><span></span>`;
+            toast.querySelector('span').textContent = text;
+            toastContainer.appendChild(toast);
+
+            requestAnimationFrame(function () {
+                toast.classList.add('is-visible');
+            });
+
+            toastTimer = setTimeout(function () {
+                toast.classList.remove('is-visible');
+                setTimeout(function () {
+                    if (toast.parentNode) {
+                        toast.remove();
+                    }
+                }, 180);
+            }, 2000);
+        }
+
+        function showSeededMessage() {
+            if (!messageSeed) {
+                return;
+            }
+
+            const seedItems = messageSeed.querySelectorAll('.message-seed-item');
+            if (!seedItems.length) {
+                return;
+            }
+
+            const latestSeed = seedItems[seedItems.length - 1];
+            showToast(latestSeed.dataset.text || '', latestSeed.dataset.level || 'info');
+        }
+
+        function closeDeleteConfirm(isAccepted) {
+            if (!deleteConfirmDialog) {
+                return;
+            }
+
+            deleteConfirmDialog.classList.remove('is-open');
+            deleteConfirmDialog.setAttribute('aria-hidden', 'true');
+            document.body.classList.remove('dialog-open');
+
+            if (deleteConfirmResolver) {
+                deleteConfirmResolver(isAccepted);
+                deleteConfirmResolver = null;
+            }
+
+            if (deleteConfirmLastFocus && typeof deleteConfirmLastFocus.focus === 'function') {
+                deleteConfirmLastFocus.focus();
+            }
+            deleteConfirmLastFocus = null;
+        }
+
+        function openDeleteConfirm(sessionTitle) {
+            if (!deleteConfirmDialog || !deleteConfirmTarget) {
+                return Promise.resolve(window.confirm('Bạn có chắc muốn xóa hội thoại này không?'));
+            }
+
+            const titleText = sessionTitle || 'hội thoại này';
+            deleteConfirmTarget.textContent = titleText;
+            deleteConfirmLastFocus = document.activeElement;
+
+            deleteConfirmDialog.classList.add('is-open');
+            deleteConfirmDialog.setAttribute('aria-hidden', 'false');
+            document.body.classList.add('dialog-open');
+
+            if (deleteConfirmCancel) {
+                deleteConfirmCancel.focus();
+            }
+
+            return new Promise(function (resolve) {
+                deleteConfirmResolver = resolve;
+            });
+        }
+
+        function buildDeleteSessionUrl(sessionId) {
+            return `/sessions/${encodeURIComponent(sessionId)}/delete/`;
+        }
+
+        function ensureHistoryEmptyState() {
+            if (!historyList) {
+                return;
+            }
+
+            const remainingRows = historyList.querySelectorAll('.session-row').length;
+            const existingEmpty = document.getElementById('session-empty');
+
+            if (remainingRows > 0) {
+                if (existingEmpty) {
+                    existingEmpty.remove();
+                }
+                return;
+            }
+
+            if (!existingEmpty) {
+                const emptyEl = document.createElement('div');
+                emptyEl.id = 'session-empty';
+                emptyEl.className = 'session-empty';
+                emptyEl.textContent = 'Chưa có lịch sử chat.';
+                historyList.appendChild(emptyEl);
+            }
+        }
+
+        async function deleteSession(button) {
+            if (!button || button.disabled) {
+                return;
+            }
+
+            const sessionId = (button.dataset.sessionId || '').trim();
+            if (!sessionId) {
+                showToast('Không xác định được hội thoại cần xóa.', 'danger');
+                return;
+            }
+
+            const sessionTitle = (button.dataset.sessionTitle || '').trim();
+            const isConfirmed = await openDeleteConfirm(sessionTitle);
+            if (!isConfirmed) {
+                return;
+            }
+
+            button.disabled = true;
+
+            try {
+                const response = await fetch(buildDeleteSessionUrl(sessionId), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    }
+                });
+
+                if (!response.ok) {
+                    const responseText = await response.text();
+                    let errorText = 'Không thể xóa hội thoại.';
+
+                    if (responseText && responseText.trim()) {
+                        try {
+                            const errorJson = JSON.parse(responseText);
+                            errorText = errorJson.error ? `Lỗi: ${errorJson.error}` : `Lỗi: ${responseText}`;
+                        } catch {
+                            errorText = `Lỗi: ${responseText}`;
+                        }
+                    }
+
+                    showToast(errorText, 'danger');
+                    return;
+                }
+
+                const row = button.closest('.session-row');
+                if (row) {
+                    row.remove();
+                }
+
+                ensureHistoryEmptyState();
+
+                if (currentSessionId && String(currentSessionId) === String(sessionId)) {
+                    showToast('Đã xóa hội thoại hiện tại.', 'success');
+                    setTimeout(function () {
+                        window.location.href = '/';
+                    }, 300);
+                    return;
+                }
+
+                showToast('Đã xóa hội thoại.', 'success');
+            } catch (error) {
+                showToast('Không thể kết nối server để xóa hội thoại.', 'danger');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        function bindSessionDeleteButtons() {
+            const deleteButtons = document.querySelectorAll('.session-delete-btn');
+            deleteButtons.forEach(function (button) {
+                button.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    deleteSession(button);
+                });
+            });
+        }
+
+        function bindDeleteConfirmDialog() {
+            if (!deleteConfirmDialog) {
+                return;
+            }
+
+            if (deleteConfirmCancel) {
+                deleteConfirmCancel.addEventListener('click', function () {
+                    closeDeleteConfirm(false);
+                });
+            }
+
+            if (deleteConfirmOk) {
+                deleteConfirmOk.addEventListener('click', function () {
+                    closeDeleteConfirm(true);
+                });
+            }
+
+            deleteConfirmDialog.addEventListener('click', function (event) {
+                if (event.target === deleteConfirmDialog) {
+                    closeDeleteConfirm(false);
+                }
+            });
+        }
+
+        function scrollToLatest() {
+            if (chatWindow) {
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+            }
+        }
+
+        function buildMessage(sender, text) {
             const isUser = sender === 'user';
-            msgDiv.className = `mb-3 ${isUser ? 'text-end' : 'text-start'}`;
-
-            const badge = document.createElement('span');
-            badge.className = `badge ${isUser ? 'bg-primary' : 'bg-success'} mb-1`;
-            badge.innerHTML = isUser
-                ? '<i class="bi bi-person"></i> Bạn'
-                : '<i class="bi bi-robot"></i> Gemma 4';
+            const row = document.createElement('div');
+            row.className = `message-row ${isUser ? 'is-user' : 'is-ai'}`;
 
             const bubble = document.createElement('div');
-            bubble.className = `p-3 rounded-3 shadow-sm ${isUser ? 'bg-light border' : 'bg-success text-white'}`;
-            bubble.style.display = 'inline-block';
-            bubble.style.maxWidth = '85%';
-            bubble.style.textAlign = 'left';
-            bubble.style.whiteSpace = 'pre-wrap';
-            bubble.textContent = text;
+            bubble.className = `message-bubble ${isUser ? 'user-bubble' : 'ai-bubble'}`;
 
-            msgDiv.appendChild(badge);
-            msgDiv.appendChild(bubble);
-            chatWindow.appendChild(msgDiv);
-            chatWindow.scrollTop = chatWindow.scrollHeight;
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+            meta.innerHTML = isUser
+                ? '<i class="bi bi-person"></i> Bạn'
+                : '<i class="bi bi-robot"></i> SmartDoc AI';
+
+            const content = document.createElement('p');
+            content.className = 'message-text';
+            content.textContent = text || '';
+
+            bubble.appendChild(meta);
+            bubble.appendChild(content);
+            row.appendChild(bubble);
+
+            return { row, bubble, content };
+        }
+
+        function appendMessage(sender, text) {
+            if (emptyMsg) {
+                emptyMsg.style.display = 'none';
+            }
+
+            const msg = buildMessage(sender, text);
+            chatWindow.appendChild(msg.row);
+            scrollToLatest();
+            return msg;
+        }
+
+        function appendTypingIndicator() {
+            const typing = appendMessage('ai', '');
+            const typingId = `typing-${Date.now()}`;
+
+            typing.row.id = typingId;
+            typing.bubble.classList.add('typing-bubble');
+            typing.content.className = 'typing-line';
+            typing.content.innerHTML = '<span></span><span></span><span></span> SmartDoc đang đọc tài liệu...';
+
+            return typingId;
+        }
+
+        function removeTypingIndicator(typingId) {
+            const node = document.getElementById(typingId);
+            if (node) {
+                node.remove();
+            }
+        }
+
+        function updateActiveDocumentHint() {
+            if (!activeDocHint) {
+                return;
+            }
+
+            if (!documentSelect || !documentSelect.value) {
+                activeDocHint.textContent = 'Chưa có tài liệu đã nhúng. Hãy tải tài liệu để bắt đầu RAG.';
+                return;
+            }
+
+            const selectedOption = documentSelect.options[documentSelect.selectedIndex];
+            const selectedLabel = selectedOption ? selectedOption.textContent.trim() : '';
+            activeDocHint.textContent = selectedLabel
+                ? `Đang tham chiếu: ${selectedLabel}`
+                : 'Hãy chọn tài liệu để bắt đầu hỏi đáp theo nội dung đã nhúng.';
         }
 
         async function sendMessage() {
             const text = chatInput.value.trim();
-            if (!text) return;
+            if (!text || sendBtn.disabled) {
+                return;
+            }
 
             const selectedDocumentId = documentSelect ? documentSelect.value : '';
             if (!selectedDocumentId) {
@@ -178,13 +507,7 @@
             sendBtn.disabled = true;
             appendMessage('user', text);
 
-            const typingId = 'typing-' + Date.now();
-            const typingDiv = document.createElement('div');
-            typingDiv.id = typingId;
-            typingDiv.className = 'text-start mb-3 text-muted';
-            typingDiv.innerHTML = '<em><i class="bi bi-robot"></i> Gemma đang đọc tài liệu và suy nghĩ...</em>';
-            chatWindow.appendChild(typingDiv);
-            chatWindow.scrollTop = chatWindow.scrollHeight;
+            const typingId = appendTypingIndicator();
 
             try {
                 const response = await fetch('/chat/', {
@@ -201,60 +524,101 @@
                     })
                 });
 
-                const typingNode = document.getElementById(typingId);
-                if (typingNode) typingNode.remove();
+                removeTypingIndicator(typingId);
 
-                if (response.ok) {
-                    // 👇 Xử lý Session ID ẩn trong header
-                    const newSessionId = response.headers.get('X-Session-Id');
-                    if (newSessionId && !currentSessionId) {
-                        currentSessionId = newSessionId;
-                        window.history.pushState({}, '', '/?session=' + currentSessionId);
+                if (!response.ok) {
+                    const errorBody = await response.text();
+                    let errorMessage = 'Không thể xử lý yêu cầu.';
+
+                    if (errorBody && errorBody.trim()) {
+                        try {
+                            const parsed = JSON.parse(errorBody);
+                            errorMessage = parsed.error ? `Lỗi: ${parsed.error}` : `Lỗi: ${errorBody}`;
+                        } catch {
+                            errorMessage = `Lỗi: ${errorBody}`;
+                        }
                     }
 
-                    // 👇 Tạo sẵn một cái bong bóng chat trống của Gemma
-                    const msgDiv = document.createElement('div');
-                    msgDiv.className = 'mb-3 text-start';
-                    msgDiv.innerHTML = `
-                        <span class="badge bg-success mb-1"><i class="bi bi-robot"></i> Gemma 4</span>
-                        <div class="p-3 rounded-3 shadow-sm bg-success text-white ai-content" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;"></div>
-                    `;
-                    chatWindow.appendChild(msgDiv);
-
-                    const contentBox = msgDiv.querySelector('.ai-content');
-
-                    // 👇 HỨNG TỪNG CHỮ NHẢ VÀO BONG BÓNG
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder('utf-8');
-                    let aiText = '';
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break; // AI ngưng nói thì dừng
-
-                        aiText += decoder.decode(value, { stream: true });
-                        contentBox.textContent = aiText; // In trực tiếp ra web
-                        chatWindow.scrollTop = chatWindow.scrollHeight; // Cuộn theo chữ
-                    }
-
-                } else {
-                    const errorData = await response.json();
-                    appendMessage('ai', 'Lỗi: ' + errorData.error);
+                    appendMessage('ai', errorMessage);
+                    return;
                 }
-            } catch (error) {
-                const typingNode = document.getElementById(typingId);
-                if (typingNode) typingNode.remove();
-                appendMessage('ai', 'Mất kết nối đến server. Hãy kiểm tra lại.');
-            }
 
-            sendBtn.disabled = false;
-            chatInput.focus();
+                const newSessionId = response.headers.get('X-Session-Id');
+                if (newSessionId && !currentSessionId) {
+                    currentSessionId = newSessionId;
+                    window.history.replaceState({}, '', '/?session=' + currentSessionId);
+                }
+
+                const responseDocumentId = response.headers.get('X-Document-Id');
+                if (responseDocumentId && documentSelect) {
+                    documentSelect.value = responseDocumentId;
+                    updateActiveDocumentHint();
+                }
+
+                const aiMessage = appendMessage('ai', '');
+                const reader = response.body ? response.body.getReader() : null;
+
+                if (!reader) {
+                    const fallbackText = await response.text();
+                    aiMessage.content.textContent = fallbackText || 'Không nhận được câu trả lời từ mô hình.';
+                    scrollToLatest();
+                    return;
+                }
+
+                const decoder = new TextDecoder('utf-8');
+                let aiText = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+
+                    aiText += decoder.decode(value, { stream: true });
+                    aiMessage.content.textContent = aiText;
+                    scrollToLatest();
+                }
+
+                aiText += decoder.decode();
+                aiMessage.content.textContent = aiText || 'Không nhận được câu trả lời từ mô hình.';
+                scrollToLatest();
+            } catch (error) {
+                removeTypingIndicator(typingId);
+                appendMessage('ai', 'Mất kết nối đến server. Hãy kiểm tra lại dịch vụ backend.');
+            } finally {
+                sendBtn.disabled = false;
+                chatInput.focus();
+            }
         }
 
-        sendBtn.addEventListener('click', sendMessage);
-        chatInput.addEventListener('keypress', function (e) {
-            if (e.key === 'Enter') sendMessage();
+        scrollToLatest();
+        updateActiveDocumentHint();
+        showSeededMessage();
+        bindSessionDeleteButtons();
+        bindDeleteConfirmDialog();
+
+        if (documentSelect) {
+            documentSelect.addEventListener('change', updateActiveDocumentHint);
+        }
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && deleteConfirmDialog && deleteConfirmDialog.classList.contains('is-open')) {
+                closeDeleteConfirm(false);
+            }
         });
+
+        if (sendBtn) {
+            sendBtn.addEventListener('click', sendMessage);
+        }
+
+        if (chatInput) {
+            chatInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    sendMessage();
+                }
+            });
+        }
     });
 </script>
 {% endblock %}
