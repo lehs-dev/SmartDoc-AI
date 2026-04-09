@@ -48,9 +48,16 @@
             <div class="card-body">
                 <h5 class="card-title"><i class="bi bi-cloud-arrow-up"></i> Tải tài liệu lên (PDF/DOCX)</h5>
                 <form action="" method="post" enctype="multipart/form-data"
-                    class="d-flex align-items-center gap-3 mt-3">
+                    class="d-flex align-items-center gap-3 mt-3 flex-wrap">
                     {% csrf_token %}
                     <input class="form-control" type="file" name="document" accept=".pdf,.docx" required>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" value="on" name="has_vietnamese"
+                            id="has-vietnamese">
+                        <label class="form-check-label" for="has-vietnamese">
+                            Tài liệu có tiếng Việt
+                        </label>
+                    </div>
                     <button type="submit" class="btn btn-success"><i class="bi bi-upload"></i> Tải lên & Xử lý</button>
                 </form>
             </div>
@@ -71,13 +78,38 @@
                         {% if msg.role == 'user' %}<i class="bi bi-person"></i> Bạn{% else %}<i class="bi bi-robot"></i>
                         Gemma 4{% endif %}
                     </span>
-                    <div class="p-3 rounded-3 shadow-sm {% if msg.role == 'user' %}bg-light border{% else %}bg-success text-white{% endif %}" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{ msg.content }}</div>
+                    <div class="p-3 rounded-3 shadow-sm {% if msg.role == 'user' %}bg-light border{% else %}bg-success text-white{% endif %}"
+                        style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{msg.content }}</div>
                 </div>
                 {% endfor %}
                 {% endif %}
 
             </div>
             <div class="card-footer bg-white border-0 p-3">
+                <div class="row g-2 mb-2">
+                    <div class="col-md-4">
+                        <label class="form-label mb-1" for="llm-model">Mô hình LLM</label>
+                        <select id="llm-model" class="form-select">
+                            {% for model in llm_models %}
+                            <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>
+                                {{ model }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label mb-1" for="document-select">Tài liệu đang hỏi</label>
+                        <select id="document-select" class="form-select" {% if not embedded_documents %}disabled{% endif %}>
+                            {% for doc in embedded_documents %}
+                            <option value="{{ doc.id }}" {% if current_document_id == doc.id|stringformat:'s' %}selected{% endif %}>
+                                {{ doc.filename }} | {{ doc.embedding_model }} | {{ doc.vector_db_key }}
+                            </option>
+                            {% empty %}
+                            <option value="" selected>Chưa có tài liệu đã nhúng</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
                 <div class="input-group">
                     <input type="text" id="chat-input" class="form-control form-control-lg"
                         placeholder="Nhập câu hỏi của bạn...">
@@ -95,6 +127,8 @@
         const chatInput = document.getElementById('chat-input');
         const sendBtn = document.getElementById('send-btn');
         const emptyMsg = document.getElementById('empty-chat-msg');
+        const llmModelSelect = document.getElementById('llm-model');
+        const documentSelect = document.getElementById('document-select');
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
 
         // Cuộn xuống cuối ngay khi vừa load trang
@@ -107,14 +141,25 @@
             if (emptyMsg) emptyMsg.style.display = 'none';
 
             const msgDiv = document.createElement('div');
-            msgDiv.className = `mb-3 ${sender === 'user' ? 'text-end' : 'text-start'}`;
             const isUser = sender === 'user';
-            msgDiv.innerHTML = `
-            <span class="badge ${isUser ? 'bg-primary' : 'bg-success'} mb-1">
-                ${isUser ? '<i class="bi bi-person"></i> Bạn' : '<i class="bi bi-robot"></i> Gemma 4'}
-            </span>
-            <div class="p-3 rounded-3 shadow-sm ${isUser ? 'bg-light border' : 'bg-success text-white'}" style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">${text}</div>
-        `;
+            msgDiv.className = `mb-3 ${isUser ? 'text-end' : 'text-start'}`;
+
+            const badge = document.createElement('span');
+            badge.className = `badge ${isUser ? 'bg-primary' : 'bg-success'} mb-1`;
+            badge.innerHTML = isUser
+                ? '<i class="bi bi-person"></i> Bạn'
+                : '<i class="bi bi-robot"></i> Gemma 4';
+
+            const bubble = document.createElement('div');
+            bubble.className = `p-3 rounded-3 shadow-sm ${isUser ? 'bg-light border' : 'bg-success text-white'}`;
+            bubble.style.display = 'inline-block';
+            bubble.style.maxWidth = '85%';
+            bubble.style.textAlign = 'left';
+            bubble.style.whiteSpace = 'pre-wrap';
+            bubble.textContent = text;
+
+            msgDiv.appendChild(badge);
+            msgDiv.appendChild(bubble);
             chatWindow.appendChild(msgDiv);
             chatWindow.scrollTop = chatWindow.scrollHeight;
         }
@@ -122,6 +167,12 @@
         async function sendMessage() {
             const text = chatInput.value.trim();
             if (!text) return;
+
+            const selectedDocumentId = documentSelect ? documentSelect.value : '';
+            if (!selectedDocumentId) {
+                appendMessage('ai', 'Vui lòng tải lên và chọn tài liệu trước khi đặt câu hỏi.');
+                return;
+            }
 
             chatInput.value = '';
             sendBtn.disabled = true;
@@ -142,10 +193,16 @@
                         'Content-Type': 'application/json',
                         'X-CSRFToken': csrfToken
                     },
-                    body: JSON.stringify({ message: text, session_id: currentSessionId })
+                    body: JSON.stringify({
+                        message: text,
+                        session_id: currentSessionId,
+                        llm_model: llmModelSelect ? llmModelSelect.value : 'gemma4:e2b',
+                        document_id: selectedDocumentId
+                    })
                 });
 
-                document.getElementById(typingId).remove();
+                const typingNode = document.getElementById(typingId);
+                if (typingNode) typingNode.remove();
 
                 if (response.ok) {
                     // 👇 Xử lý Session ID ẩn trong header
@@ -182,11 +239,12 @@
 
                 } else {
                     const errorData = await response.json();
-                    appendMessage('bot', '❌ Lỗi: ' + errorData.error);
+                    appendMessage('ai', 'Lỗi: ' + errorData.error);
                 }
             } catch (error) {
-                document.getElementById(typingId).remove();
-                appendMessage('bot', '❌ Mất kết nối đến server. Hãy kiểm tra lại.');
+                const typingNode = document.getElementById(typingId);
+                if (typingNode) typingNode.remove();
+                appendMessage('ai', 'Mất kết nối đến server. Hãy kiểm tra lại.');
             }
 
             sendBtn.disabled = false;
