@@ -1,11 +1,11 @@
 import os
 import pdfplumber
 import docx
+import ollama
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_ollama import OllamaLLM
+from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.prompts import PromptTemplate
 
 os.environ['HF_HUB_OFFLINE'] = '1'
@@ -48,10 +48,82 @@ VECTOR_DB_CONFIG = {
 _embedding_model_cache = {}
 _llm_model_cache = {}
 _vector_store_cache = {}
+_installed_ollama_models_cache = None
+
+
+def _extract_model_name(model_item):
+    if isinstance(model_item, dict):
+        return model_item.get("model") or model_item.get("name")
+
+    return getattr(model_item, "model", None) or getattr(model_item, "name", None)
+
+
+def get_installed_ollama_models(refresh=False):
+    global _installed_ollama_models_cache
+
+    if _installed_ollama_models_cache is not None and not refresh:
+        return list(_installed_ollama_models_cache)
+
+    try:
+        response = ollama.list()
+        model_items = []
+
+        if isinstance(response, dict):
+            model_items = response.get("models", [])
+        else:
+            model_items = getattr(response, "models", [])
+
+        installed_models = []
+        for item in model_items:
+            model_name = _extract_model_name(item)
+            if model_name:
+                installed_models.append(model_name)
+
+        _installed_ollama_models_cache = installed_models
+    except Exception as e:
+        print(f"Không lấy được danh sách model Ollama: {e}")
+        _installed_ollama_models_cache = []
+
+    return list(_installed_ollama_models_cache)
+
+
+def _find_available_model(preferred_models):
+    installed_models = get_installed_ollama_models()
+    if not installed_models:
+        return None
+
+    installed_set = set(installed_models)
+    for name in preferred_models:
+        if name in installed_set:
+            return name
+    return None
+
+
+def resolve_llm_model(model_name):
+    _validate_llm_model(model_name)
+
+    available = _find_available_model([model_name])
+    if available:
+        return available
+
+    fallback = _find_available_model(SUPPORTED_LLM_MODELS)
+    if fallback:
+        print(f"Model {model_name} không có trong Ollama local, fallback sang {fallback}")
+        return fallback
+
+    raise ValueError(
+        f"Model LLM '{model_name}' chưa có trong Ollama local. "
+        "Vui lòng kiểm tra lại model đã pull về trước khi chat."
+    )
 
 
 def get_available_llm_models():
-    return list(SUPPORTED_LLM_MODELS)
+    installed_models = set(get_installed_ollama_models())
+    if not installed_models:
+        return list(SUPPORTED_LLM_MODELS)
+
+    available = [model for model in SUPPORTED_LLM_MODELS if model in installed_models]
+    return available or list(SUPPORTED_LLM_MODELS)
 
 
 def get_available_embedding_models():
@@ -104,15 +176,15 @@ def get_embeddings_model(model_name):
 
 
 def get_llm_model(model_name):
-    _validate_llm_model(model_name)
+    resolved_model_name = resolve_llm_model(model_name)
 
-    if model_name not in _llm_model_cache:
-        print(f"Khởi tạo kết nối tới Ollama với model: {model_name}...")
-        _llm_model_cache[model_name] = OllamaLLM(
-            model=model_name,
+    if resolved_model_name not in _llm_model_cache:
+        print(f"Khởi tạo kết nối tới Ollama với model: {resolved_model_name}...")
+        _llm_model_cache[resolved_model_name] = OllamaLLM(
+            model=resolved_model_name,
             callbacks=[StreamingStdOutCallbackHandler()]
         )
-    return _llm_model_cache[model_name]
+    return _llm_model_cache[resolved_model_name]
 
 
 def get_cached_vector_store(vector_db_key, embedding_model_name):

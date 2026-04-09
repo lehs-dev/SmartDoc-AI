@@ -174,9 +174,17 @@ def chat_api(request):
 
             def generate_stream():
                 full_answer = ""
-                for chunk in stream_response:
-                    full_answer += chunk
-                    yield chunk
+                try:
+                    for chunk in stream_response:
+                        full_answer += chunk
+                        yield chunk
+                except Exception as stream_error:
+                    error_text = (
+                        "Loi khi goi mo hinh LLM. "
+                        f"Chi tiet: {stream_error}"
+                    )
+                    full_answer += error_text
+                    yield error_text
 
                 # Lưu câu trả lời của AI
                 if full_answer.strip():

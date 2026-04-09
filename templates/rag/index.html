@@ -79,8 +79,7 @@
                         Gemma 4{% endif %}
                     </span>
                     <div class="p-3 rounded-3 shadow-sm {% if msg.role == 'user' %}bg-light border{% else %}bg-success text-white{% endif %}"
-                        style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{
-                        msg.content }}</div>
+                        style="display: inline-block; max-width: 85%; text-align: left; white-space: pre-wrap;">{{msg.content }}</div>
                 </div>
                 {% endfor %}
                 {% endif %}
@@ -92,7 +91,7 @@
                         <label class="form-label mb-1" for="llm-model">Mô hình LLM</label>
                         <select id="llm-model" class="form-select">
                             {% for model in llm_models %}
-                            <option value="{{ model }}" {% if model==default_llm_model %}selected{% endif %}>
+                            <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>
                                 {{ model }}
                             </option>
                             {% endfor %}
@@ -100,11 +99,9 @@
                     </div>
                     <div class="col-md-8">
                         <label class="form-label mb-1" for="document-select">Tài liệu đang hỏi</label>
-                        <select id="document-select" class="form-select" {% if not embedded_documents %}disabled{% endif
-                            %}>
+                        <select id="document-select" class="form-select" {% if not embedded_documents %}disabled{% endif %}>
                             {% for doc in embedded_documents %}
-                            <option value="{{ doc.id }}" {% if current_document_id==doc.id|stringformat:'s' %}selected{%
-                                endif %}>
+                            <option value="{{ doc.id }}" {% if current_document_id == doc.id|stringformat:'s' %}selected{% endif %}>
                                 {{ doc.filename }} | {{ doc.embedding_model }} | {{ doc.vector_db_key }}
                             </option>
                             {% empty %}
