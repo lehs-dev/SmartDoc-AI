@@ -42,14 +42,15 @@
 
             <div class="history-list" role="list" id="history-list">
                 {% for s in sessions %}
-                <div class="session-row {% if current_session_id == s.id|stringformat:'s' %}is-active{% endif %}" data-session-id="{{ s.id }}">
+                <div class="session-row {% if current_session_id == s.id|stringformat:'s' %}is-active{% endif %}"
+                    data-session-id="{{ s.id }}">
                     <a href="/?session={{ s.id }}"
                         class="session-item {% if current_session_id == s.id|stringformat:'s' %}active{% endif %}">
                         <span class="session-title">{{ s.title }}</span>
                         <span class="session-time">{{ s.created_at|date:"d/m/Y H:i" }}</span>
                     </a>
-                    <button type="button" class="btn session-delete-btn" data-session-id="{{ s.id }}" data-session-title="{{ s.title|escape }}"
-                        aria-label="Xóa hội thoại" title="Xóa hội thoại">
+                    <button type="button" class="btn session-delete-btn" data-session-id="{{ s.id }}"
+                        data-session-title="{{ s.title|escape }}" aria-label="Xóa hội thoại" title="Xóa hội thoại">
                         <i class="bi bi-trash"></i>
                     </button>
                 </div>
@@ -83,12 +84,14 @@
                             id="has-vietnamese">
                         <label class="form-check-label" for="has-vietnamese">Tài liệu có tiếng Việt</label>
                     </div>
-                    <button type="submit" id="upload-submit-btn" class="btn btn-success upload-button"><i class="bi bi-upload"></i> Tải lên & Xử
+                    <button type="submit" id="upload-submit-btn" class="btn btn-success upload-button"><i
+                            class="bi bi-upload"></i> Tải lên & Xử
                         lý</button>
                 </div>
             </form>
 
-            <div id="embedding-progress-wrap" class="embedding-progress-wrap {% if not processing_documents %}d-none{% endif %}">
+            <div id="embedding-progress-wrap"
+                class="embedding-progress-wrap {% if not processing_documents %}d-none{% endif %}">
                 <div class="embedding-progress-head">
                     <h3 class="embedding-progress-title"><i class="bi bi-cpu"></i> Tiến độ embedding</h3>
                     <span class="embedding-progress-note">Tự cập nhật mỗi 2 giây</span>
@@ -96,7 +99,8 @@
 
                 <div id="embedding-progress-list" class="embedding-progress-list">
                     {% for doc in processing_documents %}
-                    <article class="embedding-item status-{{ doc.embed_status }}" data-document-id="{{ doc.id }}" data-status="{{ doc.embed_status }}">
+                    <article class="embedding-item status-{{ doc.embed_status }}" data-document-id="{{ doc.id }}"
+                        data-status="{{ doc.embed_status }}">
                         <div class="embedding-item-head">
                             <span class="embedding-item-name">{{ doc.filename }}</span>
                             <span class="embedding-badge status-{{ doc.embed_status }}">
@@ -132,7 +136,8 @@
             <div class="chat-panel-header">
                 <div>
                     <h2 class="chat-panel-title"><i class="bi bi-chat-left-text"></i> Trợ lý đọc hiểu tài liệu</h2>
-                    <p class="chat-panel-subtitle" id="active-doc-hint">Hãy chọn tài liệu để bắt đầu hỏi đáp theo nội dung đã
+                    <p class="chat-panel-subtitle" id="active-doc-hint">Hãy chọn tài liệu để bắt đầu hỏi đáp theo nội
+                        dung đã
                         nhúng.</p>
                 </div>
 
@@ -141,7 +146,7 @@
                         <label for="llm-model" class="form-label">Mô hình LLM</label>
                         <select id="llm-model" class="form-select custom-select">
                             {% for model in llm_models %}
-                            <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>{{ model }}
+                            <option value="{{ model }}" {% if model==default_llm_model %}selected{% endif %}>{{ model }}
                             </option>
                             {% endfor %}
                         </select>
@@ -149,9 +154,11 @@
 
                     <div class="meta-field">
                         <label for="document-select" class="form-label">Tài liệu đang hỏi</label>
-                        <select id="document-select" class="form-select custom-select" {% if not embedded_documents %}disabled{% endif %}>
+                        <select id="document-select" class="form-select custom-select" {% if not embedded_documents
+                            %}disabled{% endif %}>
                             {% for doc in embedded_documents %}
-                            <option value="{{ doc.id }}" {% if current_document_id == doc.id|stringformat:'s' %}selected{% endif %}>
+                            <option value="{{ doc.id }}" {% if current_document_id==doc.id|stringformat:'s' %}selected{%
+                                endif %}>
                                 {{ doc.filename }} | {{ doc.embedding_model }} | {{ doc.vector_db_key }}
                             </option>
                             {% empty %}
@@ -167,7 +174,8 @@
                 <div class="chat-empty" id="empty-chat-msg">
                     <i class="bi bi-journal-text"></i>
                     <p class="mb-1 fw-semibold">Chưa có nội dung hội thoại.</p>
-                    <p class="mb-0">Tải tài liệu, chọn tài liệu đang hỏi rồi nhập câu hỏi để nhận câu trả lời theo ngữ cảnh.
+                    <p class="mb-0">Tải tài liệu, chọn tài liệu đang hỏi rồi nhập câu hỏi để nhận câu trả lời theo ngữ
+                        cảnh.
                     </p>
                 </div>
                 {% else %}
