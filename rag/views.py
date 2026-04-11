@@ -201,3 +201,15 @@ def chat_api(request):
             return JsonResponse({'error': str(e)}, status=500)
 
     return JsonResponse({'error': 'Phương thức không hợp lệ'}, status=405)
+
+
+def delete_session_api(request, session_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Phương thức không hợp lệ'}, status=405)
+
+    session = ChatSession.objects.filter(id=session_id).first()
+    if session is None:
+        return JsonResponse({'error': 'Hội thoại không tồn tại'}, status=404)
+
+    session.delete()
+    return JsonResponse({'ok': True, 'deleted_session_id': session_id})
