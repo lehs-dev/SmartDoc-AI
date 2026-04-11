@@ -23,6 +23,13 @@ VECTOR_DB_CHOICES = (
     ('nomic_v1_db', 'nomic_v1_db'),
 )
 
+EMBED_STATUS_CHOICES = (
+    ('pending', 'pending'),
+    ('processing', 'processing'),
+    ('completed', 'completed'),
+    ('failed', 'failed'),
+)
+
 class Document(models.Model):
     FILE_TYPES = (
         ('pdf', 'PDF'),
@@ -34,6 +41,10 @@ class Document(models.Model):
     file_type = models.CharField(max_length=10, choices=FILE_TYPES)
     uploaded_at = models.DateTimeField(auto_now_add=True)
     is_embedded = models.BooleanField(default=False)
+    embed_status = models.CharField(max_length=16, choices=EMBED_STATUS_CHOICES, default='pending')
+    embed_progress = models.PositiveSmallIntegerField(default=0)
+    embed_step = models.CharField(max_length=255, blank=True)
+    embed_error = models.TextField(blank=True)
     has_vietnamese = models.BooleanField(default=False)
     file_size_mb = models.FloatField(default=0)
     embedding_model = models.CharField(max_length=64, choices=EMBEDDING_MODEL_CHOICES, blank=True)

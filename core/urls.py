@@ -23,6 +23,7 @@ from rag import views
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', views.index, name='index'),
+    path('embedding-status/', views.embedding_status_api, name='embedding_status_api'),
     path('chat/', views.chat_api, name='chat_api'),
     path('sessions/<int:session_id>/delete/', views.delete_session_api, name='delete_session_api'),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

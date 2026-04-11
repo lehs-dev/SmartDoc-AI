@@ -248,7 +248,7 @@ def process_document(file_path, file_extension):
     print(f"Đã băm tài liệu thành {len(chunks)}  đoạn nhỏ")
     return chunks
 
-def get_vector_store(chunks, embedding_model_name, vector_db_key):
+def get_vector_store(chunks, embedding_model_name, vector_db_key, progress_callback=None, batch_size=32):
     print(f"Vectorize document bằng {embedding_model_name} -> {vector_db_key}...")
     vector_db_path = resolve_vector_db_path(vector_db_key)
     os.makedirs(vector_db_path, exist_ok=True)
@@ -256,15 +256,33 @@ def get_vector_store(chunks, embedding_model_name, vector_db_key):
     embeddings = get_embeddings_model(embedding_model_name)
     index_path = os.path.join(vector_db_path, "index.faiss")
 
+    if not chunks:
+        if progress_callback:
+            progress_callback(0, 0)
+        return None
+
+    total_chunks = len(chunks)
+    processed_chunks = 0
+
     if os.path.exists(index_path):
         vector_store = FAISS.load_local(
             vector_db_path,
             embeddings,
             allow_dangerous_deserialization=True
         )
-        vector_store.add_texts(chunks)
     else:
-        vector_store = FAISS.from_texts(chunks, embedding=embeddings)
+        first_batch = chunks[:batch_size]
+        vector_store = FAISS.from_texts(first_batch, embedding=embeddings)
+        processed_chunks = len(first_batch)
+        if progress_callback:
+            progress_callback(processed_chunks, total_chunks)
+
+    for start_idx in range(processed_chunks, total_chunks, batch_size):
+        batch_chunks = chunks[start_idx:start_idx + batch_size]
+        vector_store.add_texts(batch_chunks)
+        processed_chunks += len(batch_chunks)
+        if progress_callback:
+            progress_callback(processed_chunks, total_chunks)
 
     vector_store.save_local(vector_db_path)
     cache_key = f"{vector_db_key}::{embedding_model_name}"

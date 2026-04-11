@@ -66,7 +66,7 @@
                 <h2 class="section-title" style="font-size: 1.5rem;">Smartdoc-AI</h2>
             </div>
 
-            <form action="" method="post" enctype="multipart/form-data" class="upload-form">
+            <form id="upload-form" action="" method="post" enctype="multipart/form-data" class="upload-form">
                 {% csrf_token %}
                 <div class="upload-file">
                     <div class="upload-file-head">
@@ -83,10 +83,49 @@
                             id="has-vietnamese">
                         <label class="form-check-label" for="has-vietnamese">Tài liệu có tiếng Việt</label>
                     </div>
-                    <button type="submit" class="btn btn-success upload-button"><i class="bi bi-upload"></i> Tải lên & Xử
+                    <button type="submit" id="upload-submit-btn" class="btn btn-success upload-button"><i class="bi bi-upload"></i> Tải lên & Xử
                         lý</button>
                 </div>
             </form>
+
+            <div id="embedding-progress-wrap" class="embedding-progress-wrap {% if not processing_documents %}d-none{% endif %}">
+                <div class="embedding-progress-head">
+                    <h3 class="embedding-progress-title"><i class="bi bi-cpu"></i> Tiến độ embedding</h3>
+                    <span class="embedding-progress-note">Tự cập nhật mỗi 2 giây</span>
+                </div>
+
+                <div id="embedding-progress-list" class="embedding-progress-list">
+                    {% for doc in processing_documents %}
+                    <article class="embedding-item status-{{ doc.embed_status }}" data-document-id="{{ doc.id }}" data-status="{{ doc.embed_status }}">
+                        <div class="embedding-item-head">
+                            <span class="embedding-item-name">{{ doc.filename }}</span>
+                            <span class="embedding-badge status-{{ doc.embed_status }}">
+                                {% if doc.embed_status == 'processing' %}
+                                Đang xử lý
+                                {% elif doc.embed_status == 'pending' %}
+                                Đang chờ
+                                {% elif doc.embed_status == 'failed' %}
+                                Thất bại
+                                {% else %}
+                                Hoàn tất
+                                {% endif %}
+                            </span>
+                        </div>
+                        <p class="embedding-step">{{ doc.embed_step|default:'Đang chờ xử lý...' }}</p>
+                        <div class="embedding-progress-track">
+                            <div class="embedding-progress-fill" style="width: {{ doc.embed_progress }}%;"></div>
+                        </div>
+                        <div class="embedding-progress-meta">
+                            <span>{{ doc.embed_progress }}%</span>
+                            <span>{{ doc.embedding_model }} | {{ doc.vector_db_key }}</span>
+                        </div>
+                        {% if doc.embed_status == 'failed' and doc.embed_error %}
+                        <p class="embedding-error">{{ doc.embed_error }}</p>
+                        {% endif %}
+                    </article>
+                    {% endfor %}
+                </div>
+            </div>
         </section>
 
         <section class="glass-panel chat-panel">
@@ -176,11 +215,17 @@
         const deleteConfirmCancel = document.getElementById('delete-confirm-cancel');
         const deleteConfirmOk = document.getElementById('delete-confirm-ok');
         const messageSeed = document.getElementById('server-message-seed');
+        const uploadForm = document.getElementById('upload-form');
+        const uploadSubmitBtn = document.getElementById('upload-submit-btn');
+        const embeddingProgressWrap = document.getElementById('embedding-progress-wrap');
+        const embeddingProgressList = document.getElementById('embedding-progress-list');
         const csrfInput = document.querySelector('[name=csrfmiddlewaretoken]');
         const csrfToken = csrfInput ? csrfInput.value : '';
         let toastTimer = null;
         let deleteConfirmResolver = null;
         let deleteConfirmLastFocus = null;
+        let embeddingPollingTimer = null;
+        const embeddingStatusMap = new Map();
 
         let currentSessionId = "{{ current_session_id|default_if_none:'' }}";
 
@@ -491,6 +536,253 @@
                 : 'Hãy chọn tài liệu để bắt đầu hỏi đáp theo nội dung đã nhúng.';
         }
 
+        function getEmbeddingStatusLabel(status) {
+            if (status === 'processing') {
+                return 'Đang xử lý';
+            }
+
+            if (status === 'failed') {
+                return 'Thất bại';
+            }
+
+            if (status === 'completed') {
+                return 'Hoàn tất';
+            }
+
+            return 'Đang chờ';
+        }
+
+        function normalizeProgress(value) {
+            const parsed = Number(value);
+            if (Number.isNaN(parsed)) {
+                return 0;
+            }
+
+            return Math.max(0, Math.min(100, Math.round(parsed)));
+        }
+
+        function seedEmbeddingStatusMap() {
+            if (!embeddingProgressList) {
+                return;
+            }
+
+            const items = embeddingProgressList.querySelectorAll('.embedding-item');
+            items.forEach(function (item) {
+                const docId = item.dataset.documentId;
+                const status = item.dataset.status;
+                if (docId && status) {
+                    embeddingStatusMap.set(String(docId), status);
+                }
+            });
+        }
+
+        function ensureEmbeddedDocumentOption(doc) {
+            if (!documentSelect || !doc || !doc.id || !doc.is_embedded) {
+                return;
+            }
+
+            const optionValue = String(doc.id);
+            const escapedOptionValue = window.CSS && typeof window.CSS.escape === 'function'
+                ? window.CSS.escape(optionValue)
+                : optionValue.replace(/(["\\])/g, '\\$1');
+            let option = documentSelect.querySelector(`option[value="${escapedOptionValue}"]`);
+
+            if (!option) {
+                option = document.createElement('option');
+                option.value = optionValue;
+                option.textContent = `${doc.filename} | ${doc.embedding_model} | ${doc.vector_db_key}`;
+                documentSelect.insertBefore(option, documentSelect.firstChild);
+            }
+
+            if (documentSelect.disabled) {
+                documentSelect.disabled = false;
+                const placeholder = documentSelect.querySelector('option[value=""]');
+                if (placeholder) {
+                    placeholder.remove();
+                }
+            }
+
+            if (!documentSelect.value) {
+                documentSelect.value = optionValue;
+            }
+        }
+
+        function buildEmbeddingItem(doc) {
+            const status = doc.embed_status || 'pending';
+            const progress = normalizeProgress(doc.embed_progress);
+
+            const item = document.createElement('article');
+            item.className = `embedding-item status-${status}`;
+            item.dataset.documentId = String(doc.id || '');
+            item.dataset.status = status;
+
+            const head = document.createElement('div');
+            head.className = 'embedding-item-head';
+
+            const name = document.createElement('span');
+            name.className = 'embedding-item-name';
+            name.textContent = doc.filename || 'Tài liệu chưa có tên';
+
+            const badge = document.createElement('span');
+            badge.className = `embedding-badge status-${status}`;
+            badge.textContent = getEmbeddingStatusLabel(status);
+
+            head.appendChild(name);
+            head.appendChild(badge);
+
+            const step = document.createElement('p');
+            step.className = 'embedding-step';
+            step.textContent = doc.embed_step || 'Đang chờ xử lý...';
+
+            const track = document.createElement('div');
+            track.className = 'embedding-progress-track';
+
+            const fill = document.createElement('div');
+            fill.className = 'embedding-progress-fill';
+            fill.style.width = `${progress}%`;
+            track.appendChild(fill);
+
+            const meta = document.createElement('div');
+            meta.className = 'embedding-progress-meta';
+
+            const progressNumber = document.createElement('span');
+            progressNumber.textContent = `${progress}%`;
+
+            const routeLabel = document.createElement('span');
+            routeLabel.textContent = `${doc.embedding_model || '-'} | ${doc.vector_db_key || '-'}`;
+
+            meta.appendChild(progressNumber);
+            meta.appendChild(routeLabel);
+
+            item.appendChild(head);
+            item.appendChild(step);
+            item.appendChild(track);
+            item.appendChild(meta);
+
+            if (status === 'failed' && doc.embed_error) {
+                const error = document.createElement('p');
+                error.className = 'embedding-error';
+                error.textContent = doc.embed_error;
+                item.appendChild(error);
+            }
+
+            return item;
+        }
+
+        function renderEmbeddingProgress(documents) {
+            if (!embeddingProgressWrap || !embeddingProgressList) {
+                return;
+            }
+
+            const visibleDocuments = documents.filter(function (doc) {
+                return doc.embed_status === 'pending' || doc.embed_status === 'processing' || doc.embed_status === 'failed';
+            });
+
+            embeddingProgressList.innerHTML = '';
+
+            if (!visibleDocuments.length) {
+                embeddingProgressWrap.classList.add('d-none');
+                return;
+            }
+
+            embeddingProgressWrap.classList.remove('d-none');
+
+            visibleDocuments.forEach(function (doc) {
+                embeddingProgressList.appendChild(buildEmbeddingItem(doc));
+            });
+        }
+
+        function applyEmbeddingStatusTransitions(documents) {
+            const nextStatusMap = new Map();
+
+            documents.forEach(function (doc) {
+                if (!doc || !doc.id) {
+                    return;
+                }
+
+                const docId = String(doc.id);
+                const status = doc.embed_status || 'pending';
+                const previousStatus = embeddingStatusMap.get(docId);
+
+                if (
+                    previousStatus &&
+                    (previousStatus === 'pending' || previousStatus === 'processing') &&
+                    status === 'completed'
+                ) {
+                    ensureEmbeddedDocumentOption(doc);
+                    showToast(`Đã nhúng xong: ${doc.filename}`, 'success');
+                }
+
+                if (
+                    previousStatus &&
+                    (previousStatus === 'pending' || previousStatus === 'processing') &&
+                    status === 'failed'
+                ) {
+                    showToast(`Nhúng thất bại: ${doc.filename}`, 'danger');
+                }
+
+                nextStatusMap.set(docId, status);
+            });
+
+            embeddingStatusMap.clear();
+            nextStatusMap.forEach(function (status, docId) {
+                embeddingStatusMap.set(docId, status);
+            });
+        }
+
+        async function refreshEmbeddingProgress() {
+            if (!embeddingProgressWrap || !embeddingProgressList) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/embedding-status/', {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    return;
+                }
+
+                const payload = await response.json();
+                const documents = Array.isArray(payload.documents) ? payload.documents : [];
+
+                documents.forEach(function (doc) {
+                    ensureEmbeddedDocumentOption(doc);
+                });
+
+                applyEmbeddingStatusTransitions(documents);
+                renderEmbeddingProgress(documents);
+                updateActiveDocumentHint();
+            } catch (error) {
+                // Im lặng khi polling lỗi để không làm phiền người dùng.
+            }
+        }
+
+        function startEmbeddingProgressPolling() {
+            if (!embeddingProgressWrap || !embeddingProgressList) {
+                return;
+            }
+
+            seedEmbeddingStatusMap();
+            refreshEmbeddingProgress();
+            embeddingPollingTimer = window.setInterval(refreshEmbeddingProgress, 2000);
+        }
+
+        function bindUploadFormState() {
+            if (!uploadForm || !uploadSubmitBtn) {
+                return;
+            }
+
+            uploadForm.addEventListener('submit', function () {
+                uploadSubmitBtn.disabled = true;
+                uploadSubmitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Đang tạo tác vụ...';
+            });
+        }
+
         async function sendMessage() {
             const text = chatInput.value.trim();
             if (!text || sendBtn.disabled) {
@@ -596,6 +888,8 @@
         showSeededMessage();
         bindSessionDeleteButtons();
         bindDeleteConfirmDialog();
+        bindUploadFormState();
+        startEmbeddingProgressPolling();
 
         if (documentSelect) {
             documentSelect.addEventListener('change', updateActiveDocumentHint);
