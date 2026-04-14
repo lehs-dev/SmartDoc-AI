@@ -187,28 +187,41 @@ def chat_api(request):
             # Gọi AI với mode phù hợp
             # is_rag_mode=True: RAG với memory augmentation
             # is_rag_mode=False: General chat với LLM trực tiếp
-            stream_response = ask_gemma_with_memory(
-                question=user_question,
-                session_id=session.id,
-                llm_model_name=llm_model_name,
-                embedding_model_name=selected_doc.embedding_model if selected_doc else "",
-                vector_db_key=selected_doc.vector_db_key if selected_doc else "",
-                use_memory_augmentation=True,  # Luôn dùng memory
-                is_rag_mode=is_rag_mode  # Truyền mode vào
-            )
 
             def generate_stream():
                 full_answer = ""
+                candidate_answer = ""
                 try:
+                    stream_response = ask_gemma_with_memory(
+                        question=user_question,
+                        session_id=session.id,
+                        llm_model_name=llm_model_name,
+                        embedding_model_name=selected_doc.embedding_model if selected_doc else "",
+                        vector_db_key=selected_doc.vector_db_key if selected_doc else "",
+                        use_memory_augmentation=True,  # Luôn dùng memory
+                        is_rag_mode=is_rag_mode  # Truyền mode vào
+                    )
+
                     for chunk in stream_response:
-                        full_answer += chunk
+                        candidate_answer += chunk
                         yield chunk
+
+                    full_answer = candidate_answer
+
+                    if not full_answer.strip():
+                        error_text = (
+                            f"Model {llm_model_name} không trả về nội dung. "
+                            "Vui lòng thử lại với câu hỏi ngắn hơn hoặc kiểm tra lại model Ollama."
+                        )
+                        full_answer = error_text
+                        yield error_text
+
                 except Exception as stream_error:
                     error_text = (
                         "Loi khi goi mo hinh LLM. "
                         f"Chi tiet: {stream_error}"
                     )
-                    full_answer += error_text
+                    full_answer = error_text
                     yield error_text
 
                 # Lưu câu trả lời của AI

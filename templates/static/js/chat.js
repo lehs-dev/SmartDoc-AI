@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const uploadForm = document.getElementById('upload-form');
     const llmModelSelect = document.getElementById('llm-model');
     const modeBadge = document.getElementById('mode-badge');
+    const chatStatus = document.getElementById('chat-status');
     const toastContainer = document.getElementById('toast-container');
     const confirmOverlay = document.getElementById('delete-confirm-dialog');
     const confirmCancelBtn = document.getElementById('delete-confirm-cancel');
@@ -64,6 +65,21 @@ document.addEventListener('DOMContentLoaded', function () {
         if (welcomeSection) welcomeSection.style.display = 'none';
         // Show messages-wrap if hidden
         if (messagesWrap) messagesWrap.style.display = '';
+    }
+
+    function setChatStatus(text, variant = 'thinking') {
+        if (!chatStatus) return;
+
+        if (!text) {
+            chatStatus.className = 'chat-status';
+            chatStatus.style.display = 'none';
+            chatStatus.textContent = '';
+            return;
+        }
+
+        chatStatus.className = `chat-status is-visible ${variant}`;
+        chatStatus.textContent = text;
+        chatStatus.style.display = '';
     }
 
     /* Auto-resize textarea */
@@ -129,10 +145,13 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!message) return;
 
         const selectedModel = llmModelSelect?.value || '';
+        let responseStarted = false;
 
         // Clear + reset height
         chatInput.value = '';
         chatInput.style.height = '';
+
+        setChatStatus('Đang gửi câu hỏi...', 'thinking');
 
         // Switch layout if first message
         if (chatArea.classList.contains('is-empty')) {
@@ -197,9 +216,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (mode === 'rag') {
                     modeBadge.className = 'mode-badge is-rag';
                     modeBadge.innerHTML = '<i class="bi bi-journal-text"></i><span>Chế độ RAG – Có tài liệu ngữ cảnh</span>';
+                    setChatStatus('Đang truy xuất tài liệu và ngữ cảnh...', 'rag');
                 } else {
                     modeBadge.className = 'mode-badge';
                     modeBadge.innerHTML = '<i class="bi bi-chat-dots"></i><span>Chat thường</span>';
+                    setChatStatus('Đang chuẩn bị câu trả lời...', 'thinking');
                 }
                 modeBadge.style.display = '';
             }
@@ -215,6 +236,11 @@ document.addEventListener('DOMContentLoaded', function () {
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
+
+                if (!responseStarted) {
+                    responseStarted = true;
+                    setChatStatus('Đang sinh câu trả lời...', 'thinking');
+                }
 
                 aiContent += decoder.decode(value);
 
@@ -233,8 +259,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 scrollToBottom();
             }
 
+            setChatStatus('Đã hoàn tất', 'thinking');
+            setTimeout(() => setChatStatus(''), 900);
+
         } catch (err) {
             typingEl.remove();
+            setChatStatus('');
             showToast('Lỗi: ' + err.message, 'danger');
         }
     }

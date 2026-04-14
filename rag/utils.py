@@ -9,14 +9,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.prompts import PromptTemplate
-from .models import ChatMessage, ConversationMemory, MemoryIndex
+from .models import ChatMessage, ChatSession, ConversationMemory, MemoryIndex
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 VECTOR_DB_BASE_PATH = "vector_store"
 
 SUPPORTED_LLM_MODELS = [
+    "gemma4:e2b",
     "gemma4:e4b",
-    "qwen3.5:0.8b",
     "qwen3.5:2b",
     "qwen3.5:4b",
     "qwen3.5:9b",
@@ -83,6 +83,66 @@ def _extract_model_name(model_item):
         return model_item.get("model") or model_item.get("name")
 
     return getattr(model_item, "model", None) or getattr(model_item, "name", None)
+
+
+def _normalize_session_id(session_id):
+    try:
+        return int(session_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_small_cpu_model(model_name):
+    model_name = (model_name or '').lower()
+    return 'e2b' in model_name or '0.8b' in model_name
+
+
+def _truncate_text(text, max_chars):
+    text = text or ''
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + '...'
+
+
+def _format_recent_messages(messages, max_chars=1200):
+    lines = []
+    total_chars = 0
+
+    for msg in messages:
+        line = f"{msg.get_role_display()}: {msg.content}"
+        if lines and total_chars + len(line) > max_chars:
+            break
+        lines.append(line)
+        total_chars += len(line)
+
+    return "\n".join(lines)
+
+
+def _build_llm_kwargs(resolved_model_name):
+    model_kwargs = {
+        'model': resolved_model_name,
+        'callbacks': [StreamingStdOutCallbackHandler()],
+        'keep_alive': '15m',
+    }
+
+    if _is_small_cpu_model(resolved_model_name):
+        model_kwargs.update({
+            'temperature': 0.2,
+            'repeat_penalty': 1.1,
+            'top_k': 40,
+            'top_p': 0.9,
+            'num_ctx': 2048,
+            'num_predict': 128,
+            'num_thread': max(1, min(4, os.cpu_count() or 1)),
+        })
+    else:
+        model_kwargs.update({
+            'temperature': 0.7,
+            'num_ctx': 4096,
+            'num_thread': max(1, min(4, os.cpu_count() or 1)),
+        })
+
+    return model_kwargs
 
 
 def get_installed_ollama_models(refresh=False):
@@ -225,10 +285,8 @@ def get_llm_model(model_name):
 
     if resolved_model_name not in _llm_model_cache:
         print(f"Khởi tạo kết nối tới Ollama với model: {resolved_model_name}...")
-        _llm_model_cache[resolved_model_name] = OllamaLLM(
-            model=resolved_model_name,
-            callbacks=[StreamingStdOutCallbackHandler()]
-        )
+        _llm_model_cache[resolved_model_name] = OllamaLLM(**_build_llm_kwargs(resolved_model_name))
+        
     return _llm_model_cache[resolved_model_name]
 
 
@@ -574,7 +632,18 @@ def ask_llm_direct(
     """
     print('\n💬 [GENERAL CHAT] Đang trả lời không cần RAG...')
     
-    prompt_template = """Bạn là SmartDoc AI - một trợ lý AI hữu ích, thân thiện và thông minh.
+    if _is_small_cpu_model(llm_model_name):
+        prompt_template = """Bạn là SmartDoc AI.
+
+Lịch sử chat:
+{chat_history}
+
+Câu hỏi:
+{question}
+
+Trả lời ngắn gọn, rõ ràng, bằng tiếng Việt:"""
+    else:
+        prompt_template = """Bạn là SmartDoc AI - một trợ lý AI hữu ích, thân thiện và thông minh.
 
 Bạn có thể:
 - Trả lời câu hỏi kiến thức chung
@@ -602,7 +671,7 @@ Trả lời:"""
     chain = prompt | llm
     
     return chain.stream({
-        "chat_history": chat_history,
+        "chat_history": _truncate_text(chat_history, 900 if _is_small_cpu_model(llm_model_name) else 2200),
         "question": question
     })
 
@@ -640,6 +709,10 @@ def get_recent_conversation_history(session_id, limit=5):
     Lấy lịch sử hội thoại gần đây (Short-term Memory)
     Memory-Augmented RAG: Conversation Buffer Memory
     """
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        return []
+
     messages = ChatMessage.objects.filter(
         session_id=session_id
     ).order_by('-created_at')[:limit]
@@ -653,12 +726,22 @@ def get_or_create_conversation_memory(session_id):
     Lấy hoặc tạo ConversationMemory (Long-term Memory)
     Memory-Augmented RAG: Summary Memory
     """
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        print(f"Lỗi khi lấy memory: session_id không hợp lệ ({session_id})")
+        return None
+
     try:
         memory = ConversationMemory.objects.get(session_id=session_id)
         return memory
     except ConversationMemory.DoesNotExist:
         # Tạo memory mới nếu chưa tồn tại
-        session = ChatSession.objects.get(id=session_id)
+        try:
+            session = ChatSession.objects.get(id=session_id)
+        except ChatSession.DoesNotExist:
+            print(f"Lỗi khi tạo memory: session {session_id} không tồn tại")
+            return None
+
         memory = ConversationMemory.objects.create(
             session=session,
             memory_type='summary'
@@ -666,7 +749,7 @@ def get_or_create_conversation_memory(session_id):
         return memory
 
 
-def compress_conversation_to_summary(messages, llm_model_name="qwen3.5:0.8b"):
+def compress_conversation_to_summary(messages, llm_model_name="gemma4:e2b"):
     """
     Nén lịch sử hội thoại thành summary bằng LLM
     Memory-Augmented RAG: Memory Compression
@@ -705,7 +788,7 @@ Tóm tắt (tiếng Việt, ngắn gọn):
         return ""
 
 
-def extract_key_facts_from_conversation(messages, llm_model_name="qwen3.5:0.8b"):
+def extract_key_facts_from_conversation(messages, llm_model_name="gemma4:e2b"):
     """
     Trích xuất các sự kiện quan trọng từ hội thoại
     Memory-Augmented RAG: Entity Memory
@@ -760,6 +843,11 @@ def update_conversation_memory(session_id, force_update=False):
     Cập nhật ConversationMemory từ lịch sử hội thoại
     Memory-Augmented RAG: Memory Update Strategy
     """
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        print(f"Lỗi khi update memory: session_id không hợp lệ ({session_id})")
+        return None
+
     # Lấy toàn bộ messages
     messages = ChatMessage.objects.filter(
         session_id=session_id
@@ -774,6 +862,8 @@ def update_conversation_memory(session_id, force_update=False):
     
     # Lấy memory hiện tại
     memory = get_or_create_conversation_memory(session_id)
+    if memory is None:
+        return None
     
     # Nén conversation thành summary
     summary = compress_conversation_to_summary(messages)
@@ -826,6 +916,10 @@ def retrieve_with_memory_augmentation(
         'document_chunks': [],
         'combined_context': ''
     }
+
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        return result
     
     # 1. Get short-term memory (recent messages)
     recent_messages = get_recent_conversation_history(session_id, limit=5)
@@ -834,13 +928,14 @@ def retrieve_with_memory_augmentation(
     # 2. Get long-term memory (summary + facts)
     try:
         conv_memory = get_or_create_conversation_memory(session_id)
-        result['memory_context'] = conv_memory.summary
+        if conv_memory is not None:
+            result['memory_context'] = conv_memory.summary
         
-        if conv_memory.key_facts:
-            try:
-                result['key_facts'] = json.loads(conv_memory.key_facts)
-            except:
-                result['key_facts'] = {}
+            if conv_memory.key_facts:
+                try:
+                    result['key_facts'] = json.loads(conv_memory.key_facts)
+                except:
+                    result['key_facts'] = {}
     except Exception as e:
         print(f"Lỗi khi lấy memory: {e}")
     
@@ -907,11 +1002,12 @@ def ask_gemma_with_memory(
     if not is_rag_mode:
         print('\n🔹 [MODE] General Chat - Không dùng RAG')
         # Lấy chat history từ memory
-        recent_messages = get_recent_conversation_history(session_id, limit=5)
-        chat_history = "\n".join([
-            f"{msg.get_role_display()}: {msg.content}"
-            for msg in recent_messages
-        ])
+        history_limit = 2 if _is_small_cpu_model(llm_model_name) else 5
+        recent_messages = get_recent_conversation_history(session_id, limit=history_limit)
+        chat_history = _format_recent_messages(
+            recent_messages,
+            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
+        )
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
@@ -923,11 +1019,12 @@ def ask_gemma_with_memory(
     if not embedding_model_name or not vector_db_key:
         # Fallback về general chat nếu không có embedding info
         print('⚠️  [RAG] Không có embedding info, fallback về general chat')
-        recent_messages = get_recent_conversation_history(session_id, limit=5)
-        chat_history = "\n".join([
-            f"{msg.get_role_display()}: {msg.content}"
-            for msg in recent_messages
-        ])
+        history_limit = 2 if _is_small_cpu_model(llm_model_name) else 5
+        recent_messages = get_recent_conversation_history(session_id, limit=history_limit)
+        chat_history = _format_recent_messages(
+            recent_messages,
+            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
+        )
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
@@ -940,11 +1037,12 @@ def ask_gemma_with_memory(
     if vector_store is None:
         # Fallback về general chat nếu không có vector store
         print('⚠️  [RAG] Không có vector store, fallback về general chat')
-        recent_messages = get_recent_conversation_history(session_id, limit=5)
-        chat_history = "\n".join([
-            f"{msg.get_role_display()}: {msg.content}"
-            for msg in recent_messages
-        ])
+        history_limit = 2 if _is_small_cpu_model(llm_model_name) else 5
+        recent_messages = get_recent_conversation_history(session_id, limit=history_limit)
+        chat_history = _format_recent_messages(
+            recent_messages,
+            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
+        )
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
@@ -953,23 +1051,27 @@ def ask_gemma_with_memory(
     
     # Memory-Augmented Retrieval
     if use_memory_augmentation:
+        k_chunks = 1 if _is_small_cpu_model(llm_model_name) else 2
         retrieval_result = retrieve_with_memory_augmentation(
             question=question,
             session_id=session_id,
             vector_store=vector_store,
-            k_chunks=2,  # Giảm từ 3 xuống 2 để tiết kiệm RAM
+            k_chunks=k_chunks,
             k_memories=1
         )
         
         # Format chat history từ recent messages
         recent_messages = retrieval_result['recent_messages']
-        chat_history = "\n".join([
-            f"{msg.get_role_display()}: {msg.content}"
-            for msg in recent_messages
-        ])
+        chat_history = _format_recent_messages(
+            recent_messages,
+            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
+        )
         
         # Sử dụng combined context từ memory + documents
-        context = retrieval_result['combined_context']
+        context = _truncate_text(
+            retrieval_result['combined_context'],
+            900 if _is_small_cpu_model(llm_model_name) else 3500,
+        )
         
         # Update memory sau khi retrieve (async, không block)
         try:
@@ -979,9 +1081,12 @@ def ask_gemma_with_memory(
     
     else:
         # Fallback: Không dùng memory (như ask_gemma cũ)
-        retriever = vector_store.as_retriever(search_kwargs={'k': 2})
+        retriever = vector_store.as_retriever(search_kwargs={'k': 1 if _is_small_cpu_model(llm_model_name) else 2})
         relevant_docs = retriever.invoke(question)
-        context = "\n\n".join([doc.page_content for doc in relevant_docs])
+        context = _truncate_text(
+            "\n\n".join([doc.page_content for doc in relevant_docs]),
+            900 if _is_small_cpu_model(llm_model_name) else 3500,
+        )
         chat_history = ""
     
     # Build prompt với memory context
@@ -1010,7 +1115,7 @@ Trả lời (tiếng Việt):"""
     chain = prompt | llm
     
     return chain.stream({
-        "chat_history": chat_history,
+        "chat_history": _truncate_text(chat_history, 700 if _is_small_cpu_model(llm_model_name) else 1800),
         "context": context,
         "question": question
     })

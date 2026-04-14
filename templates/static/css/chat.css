@@ -425,6 +425,69 @@ body {
     color: #2d8a65;
 }
 
+.chat-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.35rem 0.8rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    margin: 0 auto 0.75rem;
+    box-shadow: var(--shadow-sm);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity var(--transition), transform var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.chat-status.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.chat-status.is-thinking::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+    animation: statusPulse 1.4s infinite;
+}
+
+.chat-status.is-rag {
+    border-color: #4caf88;
+    color: #2d8a65;
+}
+
+@media (prefers-color-scheme: dark) {
+    .chat-status {
+        background: color-mix(in srgb, var(--surface) 92%, transparent);
+    }
+
+    .chat-status.is-rag {
+        color: #6fcca8;
+        border-color: #3a7a5e;
+    }
+}
+
+@keyframes statusPulse {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+
+    70% {
+        box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 0%, transparent);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+    }
+}
+
 @media (prefers-color-scheme: dark) {
     .mode-badge.is-rag {
         color: #6fcca8;
