@@ -151,30 +151,50 @@ def chat_api(request):
                     return JsonResponse({'error': 'Session không tồn tại'}, status=404)
             else:
                 title = user_question[:30] + "..." if len(user_question) > 30 else user_question
-                session = ChatSession.objects.create(title=title, llm_model=llm_model_name)
+                # Tạo session mới với mode='general' mặc định
+                session = ChatSession.objects.create(
+                    title=title, 
+                    llm_model=llm_model_name,
+                    mode='general'  # Mặc định là general chat
+                )
 
+            # Kiểm tra xem có document không để xác định mode
             selected_doc = _resolve_document_for_chat(document_id, session=session)
-            if selected_doc is None:
-                return JsonResponse({'error': 'Chưa có tài liệu đã nhúng. Vui lòng tải tài liệu trước.'}, status=400)
-
-            session.document = selected_doc
-            session.llm_model = llm_model_name
-            session.embedding_model = selected_doc.embedding_model
-            session.vector_db_key = selected_doc.vector_db_key
-            session.save(update_fields=['document', 'llm_model', 'embedding_model', 'vector_db_key'])
+            
+            if selected_doc and selected_doc.is_embedded:
+                # Có document → RAG mode
+                session.document = selected_doc
+                session.llm_model = llm_model_name
+                session.embedding_model = selected_doc.embedding_model
+                session.vector_db_key = selected_doc.vector_db_key
+                session.mode = 'rag'
+                session.save(update_fields=['document', 'llm_model', 'embedding_model', 'vector_db_key', 'mode'])
+                
+                is_rag_mode = True
+                print(f"✅ [CHAT] RAG Mode - Document: {selected_doc.filename}")
+            else:
+                # Không có document → General Chat mode
+                session.llm_model = llm_model_name
+                session.mode = 'general'
+                session.save(update_fields=['llm_model', 'mode'])
+                
+                is_rag_mode = False
+                print(f"💬 [CHAT] General Mode - Không có document")
 
             # Lưu câu hỏi mới của User trước khi gọi AI
             ChatMessage.objects.create(session=session, role='user', content=user_question)
 
-            # MEMORY-AUGMENTED RAG: Sử dụng ask_gemma_with_memory thay vì ask_gemma
-            # Tích hợp: Short-term memory (recent messages) + Long-term memory (summary) + Semantic memory (FAISS)
+            # Gọi AI với mode phù hợp
+            # is_rag_mode=True: RAG với memory augmentation
+            # is_rag_mode=False: General chat với LLM trực tiếp
             stream_response = ask_gemma_with_memory(
                 question=user_question,
                 session_id=session.id,
                 llm_model_name=llm_model_name,
-                embedding_model_name=selected_doc.embedding_model,
-                vector_db_key=selected_doc.vector_db_key,
-                use_memory_augmentation=True  # BẬT memory augmentation
+                embedding_model_name=selected_doc.embedding_model if selected_doc else "",
+                vector_db_key=selected_doc.vector_db_key if selected_doc else "",
+                use_memory_augmentation=True,  # Luôn dùng memory
+                is_rag_mode=is_rag_mode  # Truyền mode vào
             )
 
             def generate_stream():
@@ -203,7 +223,9 @@ def chat_api(request):
 
             response = StreamingHttpResponse(generate_stream(), content_type="text/plain; charset=utf-8")
             response['X-Session-Id'] = str(session.id)
-            response['X-Document-Id'] = str(selected_doc.id)
+            response['X-Mode'] = session.mode  # Thêm header để frontend biết mode
+            if selected_doc:
+                response['X-Document-Id'] = str(selected_doc.id)
             return response
 
         except json.JSONDecodeError:

@@ -1,23 +1,202 @@
 {% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/chat.css' %}">
+{% endblock %}
 
 {% block content %}
-<div id="app-toast-container" class="app-toast-container" aria-live="polite" aria-atomic="true"></div>
+{% csrf_token %}
 
+<div class="app-shell">
+
+    <!-- ── Sidebar ───────────────────────────── -->
+    <aside class="sidebar">
+        <div class="sidebar-top">
+            <a href="/" class="sidebar-action-btn">
+                <i class="bi bi-plus-lg"></i>
+                <span>Cuộc trò chuyện mới</span>
+            </a>
+        </div>
+
+        {% if sessions %}
+        <div class="sidebar-section-label">Lịch sử</div>
+        {% endif %}
+
+        <div class="sidebar-history">
+            {% for s in sessions %}
+            <div class="history-item {% if current_session_id == s.id|stringformat:'s' %}is-active{% endif %}">
+                <a href="/?session={{ s.id }}" class="history-item-link">
+                    <span class="history-item-title">{{ s.title }}</span>
+                    <span class="history-item-time">{{ s.created_at|date:"d/m H:i" }}</span>
+                </a>
+                <button type="button" class="history-item-delete" data-session-id="{{ s.id }}"
+                    data-session-title="{{ s.title|escape }}" title="Xóa hội thoại">
+                    <i class="bi bi-trash3"></i>
+                </button>
+            </div>
+            {% empty %}
+            <div class="history-empty">
+                <i class="bi bi-clock-history"></i>
+                Chưa có lịch sử chat
+            </div>
+            {% endfor %}
+        </div>
+    </aside>
+
+    <!-- ── Main ──────────────────────────────── -->
+    <div class="main">
+
+        {# chat-area gets is-empty when no messages → centers the input #}
+        <div id="chat-area" class="chat-area {% if not current_messages %}is-empty{% endif %}"
+            data-session-id="{{ current_session_id|default_if_none:'' }}">
+
+            <!-- Mode badge (visible once a session exists) -->
+            {% if current_session_id %}
+            <div id="mode-badge"
+                class="mode-badge {% if current_messages.first.session.mode == 'rag' %}is-rag{% endif %}"
+                style="align-self: center; margin-top: 1rem;">
+                {% if current_messages.first.session.mode == 'rag' %}
+                <i class="bi bi-journal-text"></i>
+                <span>Chế độ RAG – Có tài liệu ngữ cảnh</span>
+                {% else %}
+                <i class="bi bi-chat-dots"></i>
+                <span>Chat thường</span>
+                {% endif %}
+            </div>
+            {% else %}
+            <div id="mode-badge" class="mode-badge" style="display:none;"></div>
+            {% endif %}
+
+            <!-- Welcome screen (hidden once first message sent) -->
+            {% if not current_messages %}
+            <div id="welcome-section" class="welcome-wrap">
+                <div class="welcome-icon">✦</div>
+                <h1 class="welcome-title">Chúng ta nên bắt đầu từ đâu nhỉ?</h1>
+                <p class="welcome-subtitle">SmartDoc AI – trợ lý thông minh của bạn</p>
+
+                <div class="suggestion-grid">
+                    <button class="suggestion-card" data-suggestion="Giải thích khái niệm machine learning">
+                        <div class="suggestion-icon">💡</div>
+                        <div class="suggestion-text">Giải thích khái niệm machine learning</div>
+                    </button>
+                    <button class="suggestion-card" data-suggestion="Viết code Python để phân tích dữ liệu">
+                        <div class="suggestion-icon">💻</div>
+                        <div class="suggestion-text">Viết code Python để phân tích dữ liệu</div>
+                    </button>
+                    <button class="suggestion-card" data-suggestion="Tóm tắt cuốn sách Đắc Nhân Tâm">
+                        <div class="suggestion-icon">📚</div>
+                        <div class="suggestion-text">Tóm tắt cuốn sách Đắc Nhân Tâm</div>
+                    </button>
+                    <button class="suggestion-card" data-suggestion="Gợi ý ý tưởng project Django">
+                        <div class="suggestion-icon">🚀</div>
+                        <div class="suggestion-text">Gợi ý ý tưởng project Django</div>
+                    </button>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Message list -->
+            <div id="messages-wrap" class="messages-wrap" {% if not current_messages %}style="display:none;" {% endif %}>
+                <div id="messages-inner" class="messages-inner">
+                    {% for msg in current_messages %}
+                    <div class="msg {% if msg.role == 'user' %}msg-user{% else %}msg-ai{% endif %}">
+                        {% if msg.role == 'ai' %}
+                        <div class="msg-avatar ai-avatar">AI</div>
+                        {% endif %}
+                        <div class="msg-body">
+                            <div class="msg-bubble">{{ msg.content|linebreaks }}</div>
+                        </div>
+                        {% if msg.role == 'user' %}
+                        <div class="msg-avatar">👤</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Input box -->
+            <div class="input-wrap">
+                <div class="input-box">
+                    <textarea id="chat-input" class="input-textarea" placeholder="Nhập câu hỏi của bạn…" rows="1"
+                        autocomplete="off"></textarea>
+
+                    <div class="input-toolbar">
+                        <div class="toolbar-left">
+                            <button type="button" id="upload-btn" class="toolbar-btn" title="Tải tài liệu lên">
+                                <i class="bi bi-plus-lg"></i>
+                            </button>
+                        </div>
+                        <div class="toolbar-right">
+                            <select id="llm-model" class="model-select" title="Chọn model">
+                                {% for model in llm_models %}
+                                <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>
+                                    {{ model }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <button type="button" id="send-btn" class="send-btn" title="Gửi (Enter)">
+                                <i class="bi bi-arrow-up"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>{# end #chat-area #}
+    </div>{# end .main #}
+</div>{# end .app-shell #}
+
+<!-- ── Upload Modal ──────────────────────────── -->
+<div id="upload-modal" class="modal-overlay">
+    <div class="modal-card">
+        <h2 class="modal-title">Tải tài liệu lên</h2>
+        <form id="upload-form" method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="file-drop-zone">
+                <input type="file" id="document-input" name="document" accept=".pdf,.docx">
+                <div class="file-drop-icon">
+                    <i class="bi bi-file-earmark-arrow-up"></i>
+                </div>
+                <div class="file-drop-label">
+                    Chọn file PDF hoặc DOCX
+                    <small>hoặc kéo thả file vào đây</small>
+                </div>
+            </div>
+
+            <label class="checkbox-row">
+                <input type="checkbox" name="has_vietnamese" value="on">
+                Tài liệu có tiếng Việt
+            </label>
+
+            <div class="modal-actions">
+                <button type="button" id="cancel-upload" class="btn-ghost">Hủy</button>
+                <button type="submit" class="btn-primary">Tải lên</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Confirm delete dialog ─────────────────── -->
 <div id="delete-confirm-dialog" class="confirm-overlay" aria-hidden="true">
-    <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title"
-        aria-describedby="delete-confirm-desc">
-        <h3 id="delete-confirm-title" class="confirm-title">Xóa đoạn chat?</h3>
-        <p class="confirm-main">Hành động này sẽ xóa <strong id="delete-confirm-target">hội thoại này</strong></p>
-        <p id="delete-confirm-desc" class="confirm-sub">Bạn sẽ mất toàn bộ nội dung trong đoạn chat này.</p>
+    <div class="confirm-modal" role="dialog" aria-modal="true">
+        <h3 class="confirm-title">Xóa đoạn chat?</h3>
+        <p class="confirm-body">
+            Hành động này sẽ xóa vĩnh viễn <strong id="delete-confirm-target">hội thoại này</strong>.
+        </p>
         <div class="confirm-actions">
-            <button type="button" id="delete-confirm-cancel" class="btn confirm-cancel-btn">Hủy bỏ</button>
-            <button type="button" id="delete-confirm-ok" class="btn confirm-delete-btn">Xóa</button>
+            <button type="button" id="delete-confirm-cancel" class="confirm-cancel">Hủy bỏ</button>
+            <button type="button" id="delete-confirm-ok" class="confirm-delete">Xóa</button>
         </div>
     </div>
 </div>
 
+<!-- ── Toast container ───────────────────────── -->
+<div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+<!-- Django messages seed -->
 {% if messages %}
-<div id="server-message-seed" class="d-none">
+<div id="server-message-seed" style="display:none;">
     {% for message in messages %}
     <div class="message-seed-item"
         data-level="{% if 'error' in message.tags %}danger{% elif 'warning' in message.tags %}warning{% elif 'info' in message.tags %}info{% else %}success{% endif %}"
@@ -25,600 +204,8 @@
     {% endfor %}
 </div>
 {% endif %}
+{% endblock %}
 
-<div class="row g-3 g-xl-4 align-items-stretch">
-    <aside class="col-12 col-lg-4 col-xl-3">
-        <section class="glass-panel sidebar-panel h-100">
-            <div class="section-title-wrap">
-                <div class="section-title-head">
-                    <h2 class="section-title"><i class="bi bi-clock-history"></i> Lịch sử trò chuyện</h2>
-                </div>
-                <p class="section-subtitle">Theo dõi phiên hỏi đáp theo từng tài liệu đã nạp.</p>
-            </div>
-
-            <div class="history-toolbar">
-                <a href="/" class="btn new-chat-btn w-100"><i class="bi bi-plus-circle"></i> Cuộc hội thoại mới</a>
-            </div>
-
-            <div class="history-list" role="list" id="history-list">
-                {% for s in sessions %}
-                <div class="session-row {% if current_session_id == s.id|stringformat:'s' %}is-active{% endif %}" data-session-id="{{ s.id }}">
-                    <a href="/?session={{ s.id }}"
-                        class="session-item {% if current_session_id == s.id|stringformat:'s' %}active{% endif %}">
-                        <span class="session-title">{{ s.title }}</span>
-                        <span class="session-time">{{ s.created_at|date:"d/m/Y H:i" }}</span>
-                    </a>
-                    <button type="button" class="btn session-delete-btn" data-session-id="{{ s.id }}" data-session-title="{{ s.title|escape }}"
-                        aria-label="Xóa hội thoại" title="Xóa hội thoại">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </div>
-                {% empty %}
-                <div class="session-empty" id="session-empty">Chưa có lịch sử chat.</div>
-                {% endfor %}
-            </div>
-        </section>
-    </aside>
-
-    <section class="col-12 col-lg-8 col-xl-9 d-flex flex-column gap-3 workspace-main-col">
-        <section class="glass-panel upload-panel">
-            <div class="section-title-wrap">
-                <h2 class="section-title" style="font-size: 1.5rem;">Smartdoc-AI</h2>
-            </div>
-
-            <form action="" method="post" enctype="multipart/form-data" class="upload-form">
-                {% csrf_token %}
-                <div class="upload-file">
-                    <div class="upload-file-head">
-                        <label for="document-input" class="form-label">Chọn tài liệu</label>
-                        <span class="upload-inline-note">Tải PDF/DOCX để tạo ngữ cảnh RAG trước khi đặt câu hỏi.</span>
-                    </div>
-                    <input id="document-input" class="form-control" type="file" name="document" accept=".pdf,.docx"
-                        required>
-                </div>
-
-                <div class="upload-actions">
-                    <div class="form-check upload-check">
-                        <input class="form-check-input" type="checkbox" value="on" name="has_vietnamese"
-                            id="has-vietnamese">
-                        <label class="form-check-label" for="has-vietnamese">Tài liệu có tiếng Việt</label>
-                    </div>
-                    <button type="submit" class="btn btn-success upload-button"><i class="bi bi-upload"></i> Tải lên & Xử
-                        lý</button>
-                </div>
-            </form>
-        </section>
-
-        <section class="glass-panel chat-panel">
-            <div class="chat-panel-header">
-                <div>
-                    <h2 class="chat-panel-title"><i class="bi bi-chat-left-text"></i> Trợ lý đọc hiểu tài liệu</h2>
-                    <p class="chat-panel-subtitle" id="active-doc-hint">Hãy chọn tài liệu để bắt đầu hỏi đáp theo nội dung đã
-                        nhúng.</p>
-                </div>
-
-                <div class="chat-meta-grid">
-                    <div class="meta-field">
-                        <label for="llm-model" class="form-label">Mô hình LLM</label>
-                        <select id="llm-model" class="form-select custom-select">
-                            {% for model in llm_models %}
-                            <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>{{ model }}
-                            </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-
-                    <div class="meta-field">
-                        <label for="document-select" class="form-label">Tài liệu đang hỏi</label>
-                        <select id="document-select" class="form-select custom-select" {% if not embedded_documents %}disabled{% endif %}>
-                            {% for doc in embedded_documents %}
-                            <option value="{{ doc.id }}" {% if current_document_id == doc.id|stringformat:'s' %}selected{% endif %}>
-                                {{ doc.filename }} | {{ doc.embedding_model }} | {{ doc.vector_db_key }}
-                            </option>
-                            {% empty %}
-                            <option value="" selected>Chưa có tài liệu đã nhúng</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="chat-window" id="chat-window">
-                {% if not current_messages %}
-                <div class="chat-empty" id="empty-chat-msg">
-                    <i class="bi bi-journal-text"></i>
-                    <p class="mb-1 fw-semibold">Chưa có nội dung hội thoại.</p>
-                    <p class="mb-0">Tải tài liệu, chọn tài liệu đang hỏi rồi nhập câu hỏi để nhận câu trả lời theo ngữ cảnh.
-                    </p>
-                </div>
-                {% else %}
-                {% for msg in current_messages %}
-                <div class="message-row {% if msg.role == 'user' %}is-user{% else %}is-ai{% endif %}">
-                    <div class="message-bubble {% if msg.role == 'user' %}user-bubble{% else %}ai-bubble{% endif %}">
-                        <div class="message-meta">
-                            {% if msg.role == 'user' %}
-                            <i class="bi bi-person"></i> Bạn
-                            {% else %}
-                            <i class="bi bi-robot"></i> SmartDoc AI
-                            {% endif %}
-                        </div>
-                        <p class="message-text">{{ msg.content }}</p>
-                    </div>
-                </div>
-                {% endfor %}
-                {% endif %}
-            </div>
-
-            <div class="chat-composer">
-                <div class="input-group composer-group">
-                    <input type="text" id="chat-input" class="form-control chat-input"
-                        placeholder="Ví dụ: Tóm tắt mục tiêu chính trong tài liệu này...">
-                    <button class="btn send-btn" id="send-btn" type="button"><i class="bi bi-send"></i> Gửi</button>
-                </div>
-            </div>
-        </section>
-    </section>
-</div>
-
-<script>
-    document.addEventListener('DOMContentLoaded', function () {
-        const chatWindow = document.getElementById('chat-window');
-        const chatInput = document.getElementById('chat-input');
-        const sendBtn = document.getElementById('send-btn');
-        const emptyMsg = document.getElementById('empty-chat-msg');
-        const llmModelSelect = document.getElementById('llm-model');
-        const documentSelect = document.getElementById('document-select');
-        const activeDocHint = document.getElementById('active-doc-hint');
-        const historyList = document.getElementById('history-list');
-        const toastContainer = document.getElementById('app-toast-container');
-        const deleteConfirmDialog = document.getElementById('delete-confirm-dialog');
-        const deleteConfirmTarget = document.getElementById('delete-confirm-target');
-        const deleteConfirmCancel = document.getElementById('delete-confirm-cancel');
-        const deleteConfirmOk = document.getElementById('delete-confirm-ok');
-        const messageSeed = document.getElementById('server-message-seed');
-        const csrfInput = document.querySelector('[name=csrfmiddlewaretoken]');
-        const csrfToken = csrfInput ? csrfInput.value : '';
-        let toastTimer = null;
-        let deleteConfirmResolver = null;
-        let deleteConfirmLastFocus = null;
-
-        let currentSessionId = "{{ current_session_id|default_if_none:'' }}";
-
-        function showToast(text, level) {
-            if (!toastContainer || !text) {
-                return;
-            }
-
-            if (toastTimer) {
-                clearTimeout(toastTimer);
-                toastTimer = null;
-            }
-
-            const iconMap = {
-                success: 'bi-check-circle',
-                danger: 'bi-exclamation-circle',
-                warning: 'bi-exclamation-triangle',
-                info: 'bi-info-circle'
-            };
-
-            const toastLevel = iconMap[level] ? level : 'info';
-            const iconClass = iconMap[toastLevel];
-
-            toastContainer.innerHTML = '';
-
-            const toast = document.createElement('div');
-            toast.className = `app-toast app-toast-${toastLevel}`;
-            toast.innerHTML = `<i class="bi ${iconClass}"></i><span></span>`;
-            toast.querySelector('span').textContent = text;
-            toastContainer.appendChild(toast);
-
-            requestAnimationFrame(function () {
-                toast.classList.add('is-visible');
-            });
-
-            toastTimer = setTimeout(function () {
-                toast.classList.remove('is-visible');
-                setTimeout(function () {
-                    if (toast.parentNode) {
-                        toast.remove();
-                    }
-                }, 180);
-            }, 2000);
-        }
-
-        function showSeededMessage() {
-            if (!messageSeed) {
-                return;
-            }
-
-            const seedItems = messageSeed.querySelectorAll('.message-seed-item');
-            if (!seedItems.length) {
-                return;
-            }
-
-            const latestSeed = seedItems[seedItems.length - 1];
-            showToast(latestSeed.dataset.text || '', latestSeed.dataset.level || 'info');
-        }
-
-        function closeDeleteConfirm(isAccepted) {
-            if (!deleteConfirmDialog) {
-                return;
-            }
-
-            deleteConfirmDialog.classList.remove('is-open');
-            deleteConfirmDialog.setAttribute('aria-hidden', 'true');
-            document.body.classList.remove('dialog-open');
-
-            if (deleteConfirmResolver) {
-                deleteConfirmResolver(isAccepted);
-                deleteConfirmResolver = null;
-            }
-
-            if (deleteConfirmLastFocus && typeof deleteConfirmLastFocus.focus === 'function') {
-                deleteConfirmLastFocus.focus();
-            }
-            deleteConfirmLastFocus = null;
-        }
-
-        function openDeleteConfirm(sessionTitle) {
-            if (!deleteConfirmDialog || !deleteConfirmTarget) {
-                return Promise.resolve(window.confirm('Bạn có chắc muốn xóa hội thoại này không?'));
-            }
-
-            const titleText = sessionTitle || 'hội thoại này';
-            deleteConfirmTarget.textContent = titleText;
-            deleteConfirmLastFocus = document.activeElement;
-
-            deleteConfirmDialog.classList.add('is-open');
-            deleteConfirmDialog.setAttribute('aria-hidden', 'false');
-            document.body.classList.add('dialog-open');
-
-            if (deleteConfirmCancel) {
-                deleteConfirmCancel.focus();
-            }
-
-            return new Promise(function (resolve) {
-                deleteConfirmResolver = resolve;
-            });
-        }
-
-        function buildDeleteSessionUrl(sessionId) {
-            return `/sessions/${encodeURIComponent(sessionId)}/delete/`;
-        }
-
-        function ensureHistoryEmptyState() {
-            if (!historyList) {
-                return;
-            }
-
-            const remainingRows = historyList.querySelectorAll('.session-row').length;
-            const existingEmpty = document.getElementById('session-empty');
-
-            if (remainingRows > 0) {
-                if (existingEmpty) {
-                    existingEmpty.remove();
-                }
-                return;
-            }
-
-            if (!existingEmpty) {
-                const emptyEl = document.createElement('div');
-                emptyEl.id = 'session-empty';
-                emptyEl.className = 'session-empty';
-                emptyEl.textContent = 'Chưa có lịch sử chat.';
-                historyList.appendChild(emptyEl);
-            }
-        }
-
-        async function deleteSession(button) {
-            if (!button || button.disabled) {
-                return;
-            }
-
-            const sessionId = (button.dataset.sessionId || '').trim();
-            if (!sessionId) {
-                showToast('Không xác định được hội thoại cần xóa.', 'danger');
-                return;
-            }
-
-            const sessionTitle = (button.dataset.sessionTitle || '').trim();
-            const isConfirmed = await openDeleteConfirm(sessionTitle);
-            if (!isConfirmed) {
-                return;
-            }
-
-            button.disabled = true;
-
-            try {
-                const response = await fetch(buildDeleteSessionUrl(sessionId), {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': csrfToken
-                    }
-                });
-
-                if (!response.ok) {
-                    const responseText = await response.text();
-                    let errorText = 'Không thể xóa hội thoại.';
-
-                    if (responseText && responseText.trim()) {
-                        try {
-                            const errorJson = JSON.parse(responseText);
-                            errorText = errorJson.error ? `Lỗi: ${errorJson.error}` : `Lỗi: ${responseText}`;
-                        } catch {
-                            errorText = `Lỗi: ${responseText}`;
-                        }
-                    }
-
-                    showToast(errorText, 'danger');
-                    return;
-                }
-
-                const row = button.closest('.session-row');
-                if (row) {
-                    row.remove();
-                }
-
-                ensureHistoryEmptyState();
-
-                if (currentSessionId && String(currentSessionId) === String(sessionId)) {
-                    showToast('Đã xóa hội thoại hiện tại.', 'success');
-                    setTimeout(function () {
-                        window.location.href = '/';
-                    }, 300);
-                    return;
-                }
-
-                showToast('Đã xóa hội thoại.', 'success');
-            } catch (error) {
-                showToast('Không thể kết nối server để xóa hội thoại.', 'danger');
-            } finally {
-                button.disabled = false;
-            }
-        }
-
-        function bindSessionDeleteButtons() {
-            const deleteButtons = document.querySelectorAll('.session-delete-btn');
-            deleteButtons.forEach(function (button) {
-                button.addEventListener('click', function (event) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    deleteSession(button);
-                });
-            });
-        }
-
-        function bindDeleteConfirmDialog() {
-            if (!deleteConfirmDialog) {
-                return;
-            }
-
-            if (deleteConfirmCancel) {
-                deleteConfirmCancel.addEventListener('click', function () {
-                    closeDeleteConfirm(false);
-                });
-            }
-
-            if (deleteConfirmOk) {
-                deleteConfirmOk.addEventListener('click', function () {
-                    closeDeleteConfirm(true);
-                });
-            }
-
-            deleteConfirmDialog.addEventListener('click', function (event) {
-                if (event.target === deleteConfirmDialog) {
-                    closeDeleteConfirm(false);
-                }
-            });
-        }
-
-        function scrollToLatest() {
-            if (chatWindow) {
-                chatWindow.scrollTop = chatWindow.scrollHeight;
-            }
-        }
-
-        function buildMessage(sender, text) {
-            const isUser = sender === 'user';
-            const row = document.createElement('div');
-            row.className = `message-row ${isUser ? 'is-user' : 'is-ai'}`;
-
-            const bubble = document.createElement('div');
-            bubble.className = `message-bubble ${isUser ? 'user-bubble' : 'ai-bubble'}`;
-
-            const meta = document.createElement('div');
-            meta.className = 'message-meta';
-            meta.innerHTML = isUser
-                ? '<i class="bi bi-person"></i> Bạn'
-                : '<i class="bi bi-robot"></i> SmartDoc AI';
-
-            const content = document.createElement('p');
-            content.className = 'message-text';
-            content.textContent = text || '';
-
-            bubble.appendChild(meta);
-            bubble.appendChild(content);
-            row.appendChild(bubble);
-
-            return { row, bubble, content };
-        }
-
-        function appendMessage(sender, text) {
-            if (emptyMsg) {
-                emptyMsg.style.display = 'none';
-            }
-
-            const msg = buildMessage(sender, text);
-            chatWindow.appendChild(msg.row);
-            scrollToLatest();
-            return msg;
-        }
-
-        function appendTypingIndicator() {
-            const typing = appendMessage('ai', '');
-            const typingId = `typing-${Date.now()}`;
-
-            typing.row.id = typingId;
-            typing.bubble.classList.add('typing-bubble');
-            typing.content.className = 'typing-line';
-            typing.content.innerHTML = '<span></span><span></span><span></span> SmartDoc đang đọc tài liệu...';
-
-            return typingId;
-        }
-
-        function removeTypingIndicator(typingId) {
-            const node = document.getElementById(typingId);
-            if (node) {
-                node.remove();
-            }
-        }
-
-        function updateActiveDocumentHint() {
-            if (!activeDocHint) {
-                return;
-            }
-
-            if (!documentSelect || !documentSelect.value) {
-                activeDocHint.textContent = 'Chưa có tài liệu đã nhúng. Hãy tải tài liệu để bắt đầu RAG.';
-                return;
-            }
-
-            const selectedOption = documentSelect.options[documentSelect.selectedIndex];
-            const selectedLabel = selectedOption ? selectedOption.textContent.trim() : '';
-            activeDocHint.textContent = selectedLabel
-                ? `Đang tham chiếu: ${selectedLabel}`
-                : 'Hãy chọn tài liệu để bắt đầu hỏi đáp theo nội dung đã nhúng.';
-        }
-
-        async function sendMessage() {
-            const text = chatInput.value.trim();
-            if (!text || sendBtn.disabled) {
-                return;
-            }
-
-            const selectedDocumentId = documentSelect ? documentSelect.value : '';
-            if (!selectedDocumentId) {
-                appendMessage('ai', 'Vui lòng tải lên và chọn tài liệu trước khi đặt câu hỏi.');
-                return;
-            }
-
-            chatInput.value = '';
-            sendBtn.disabled = true;
-            appendMessage('user', text);
-
-            const typingId = appendTypingIndicator();
-
-            try {
-                const response = await fetch('/chat/', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': csrfToken
-                    },
-                    body: JSON.stringify({
-                        message: text,
-                        session_id: currentSessionId,
-                        llm_model: llmModelSelect ? llmModelSelect.value : 'gemma4:e4b',
-                        document_id: selectedDocumentId
-                    })
-                });
-
-                removeTypingIndicator(typingId);
-
-                if (!response.ok) {
-                    const errorBody = await response.text();
-                    let errorMessage = 'Không thể xử lý yêu cầu.';
-
-                    if (errorBody && errorBody.trim()) {
-                        try {
-                            const parsed = JSON.parse(errorBody);
-                            errorMessage = parsed.error ? `Lỗi: ${parsed.error}` : `Lỗi: ${errorBody}`;
-                        } catch {
-                            errorMessage = `Lỗi: ${errorBody}`;
-                        }
-                    }
-
-                    appendMessage('ai', errorMessage);
-                    return;
-                }
-
-                const newSessionId = response.headers.get('X-Session-Id');
-                if (newSessionId && !currentSessionId) {
-                    currentSessionId = newSessionId;
-                    window.history.replaceState({}, '', '/?session=' + currentSessionId);
-                }
-
-                const responseDocumentId = response.headers.get('X-Document-Id');
-                if (responseDocumentId && documentSelect) {
-                    documentSelect.value = responseDocumentId;
-                    updateActiveDocumentHint();
-                }
-
-                const aiMessage = appendMessage('ai', '');
-                const reader = response.body ? response.body.getReader() : null;
-
-                if (!reader) {
-                    const fallbackText = await response.text();
-                    aiMessage.content.textContent = fallbackText || 'Không nhận được câu trả lời từ mô hình.';
-                    scrollToLatest();
-                    return;
-                }
-
-                const decoder = new TextDecoder('utf-8');
-                let aiText = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) {
-                        break;
-                    }
-
-                    aiText += decoder.decode(value, { stream: true });
-                    aiMessage.content.textContent = aiText;
-                    scrollToLatest();
-                }
-
-                aiText += decoder.decode();
-                aiMessage.content.textContent = aiText || 'Không nhận được câu trả lời từ mô hình.';
-                scrollToLatest();
-            } catch (error) {
-                removeTypingIndicator(typingId);
-                appendMessage('ai', 'Mất kết nối đến server. Hãy kiểm tra lại dịch vụ backend.');
-            } finally {
-                sendBtn.disabled = false;
-                chatInput.focus();
-            }
-        }
-
-        scrollToLatest();
-        updateActiveDocumentHint();
-        showSeededMessage();
-        bindSessionDeleteButtons();
-        bindDeleteConfirmDialog();
-
-        if (documentSelect) {
-            documentSelect.addEventListener('change', updateActiveDocumentHint);
-        }
-
-        document.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape' && deleteConfirmDialog && deleteConfirmDialog.classList.contains('is-open')) {
-                closeDeleteConfirm(false);
-            }
-        });
-
-        if (sendBtn) {
-            sendBtn.addEventListener('click', sendMessage);
-        }
-
-        if (chatInput) {
-            chatInput.addEventListener('keydown', function (event) {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    sendMessage();
-                }
-            });
-        }
-    });
-</script>
+{% block extra_js %}
+<script src="{% static 'js/chat.js' %}"></script>
 {% endblock %}

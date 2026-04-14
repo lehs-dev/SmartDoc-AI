@@ -48,7 +48,13 @@ class Document(models.Model):
         return self.filename
     
 class ChatSession(models.Model):
+    MODE_CHOICES = (
+        ('general', 'Chat thường - Không dùng RAG'),
+        ('rag', 'RAG - Có tài liệu ngữ cảnh'),
+    )
+    
     title = models.CharField(max_length=255, default="New chat")
+    mode = models.CharField(max_length=20, choices=MODE_CHOICES, default='general')
     document = models.ForeignKey(Document, on_delete=models.SET_NULL, null=True, blank=True, related_name='chat_sessions')
     llm_model = models.CharField(max_length=50, choices=LLM_MODEL_CHOICES, default='gemma4:e4b')
     embedding_model = models.CharField(max_length=64, choices=EMBEDDING_MODEL_CHOICES, blank=True)
@@ -56,7 +62,7 @@ class ChatSession(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.title} - {self.created_at.strftime('%d/%m/%Y %H:%M')}"
+        return f"{self.title} - {self.created_at.strftime('%d/%m/%Y %H:%M')} ({self.get_mode_display()})"
     
 class ChatMessage(models.Model):
     ROLES_CHOICES = (

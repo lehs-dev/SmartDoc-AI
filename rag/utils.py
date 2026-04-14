@@ -552,6 +552,62 @@ Trả lời:"""
 
 
 # ============================================================================
+# GENERAL CHAT MODE - DIRECT LLM (NO RAG)
+# ============================================================================
+
+def ask_llm_direct(
+    question,
+    chat_history="",
+    llm_model_name="gemma4:e4b",
+):
+    """
+    General Chat Mode - Hỏi đáp trực tiếp với LLM không cần RAG
+    Sử dụng khi không có tài liệu nào được upload
+    
+    Args:
+        question: Câu hỏi của user
+        chat_history: Lịch sử chat (optional)
+        llm_model_name: Tên LLM model
+    
+    Returns:
+        Stream generator từ LLM
+    """
+    print('\n💬 [GENERAL CHAT] Đang trả lời không cần RAG...')
+    
+    prompt_template = """Bạn là SmartDoc AI - một trợ lý AI hữu ích, thân thiện và thông minh.
+
+Bạn có thể:
+- Trả lời câu hỏi kiến thức chung
+- Giải thích khái niệm, ý tưởng
+- Hỗ trợ viết code, phân tích vấn đề
+- Trò chuyện tự nhiên như người trợ lý
+
+Lịch sử chat gần đây (nếu có):
+{chat_history}
+
+Câu hỏi của người dùng:
+{question}
+
+Hãy trả lời một cách tự nhiên, hữu ích và thân thiện. Sử dụng tiếng Việt trừ khi người dùng yêu cầu ngôn ngữ khác.
+
+Trả lời:"""
+
+    prompt = PromptTemplate(
+        template=prompt_template,
+        input_variables=["chat_history", "question"]
+    )
+    
+    print(f'🤖 [GENERAL CHAT] Sử dụng model: {llm_model_name}')
+    llm = get_llm_model(llm_model_name)
+    chain = prompt | llm
+    
+    return chain.stream({
+        "chat_history": chat_history,
+        "question": question
+    })
+
+
+# ============================================================================
 # MEMORY-AUGMENTED RAG FUNCTIONS
 # ============================================================================
 
@@ -828,7 +884,8 @@ def ask_gemma_with_memory(
     llm_model_name="gemma4:e4b",
     embedding_model_name="",
     vector_db_key="",
-    use_memory_augmentation=True
+    use_memory_augmentation=True,
+    is_rag_mode=False
 ):
     """
     Memory-Augmented RAG: Hỏi đáp với memory augmentation
@@ -841,26 +898,58 @@ def ask_gemma_with_memory(
         embedding_model_name: Tên embedding model
         vector_db_key: Key của vector DB
         use_memory_augmentation: Có sử dụng memory augmentation không
+        is_rag_mode: True nếu đang ở chế độ RAG (có document), False nếu general chat
     
     Returns:
         Stream generator từ LLM
     """
-    print('Đang tìm kiếm thông tin cho câu hỏi (Memory-Augmented)...')
+    # Nếu không ở RAG mode, fallback về general chat
+    if not is_rag_mode:
+        print('\n🔹 [MODE] General Chat - Không dùng RAG')
+        # Lấy chat history từ memory
+        recent_messages = get_recent_conversation_history(session_id, limit=5)
+        chat_history = "\n".join([
+            f"{msg.get_role_display()}: {msg.content}"
+            for msg in recent_messages
+        ])
+        return ask_llm_direct(
+            question=question,
+            chat_history=chat_history,
+            llm_model_name=llm_model_name
+        )
+    
+    print('Đang tìm kiếm thông tin cho câu hỏi (Memory-Augmented RAG)...')
     
     if not embedding_model_name or not vector_db_key:
-        return iter([
-            "Xin lỗi, tôi chưa xác định được kho dữ liệu cho tài liệu này. "
-            "Vui lòng tải lại tài liệu hoặc chọn tài liệu khác."
+        # Fallback về general chat nếu không có embedding info
+        print('⚠️  [RAG] Không có embedding info, fallback về general chat')
+        recent_messages = get_recent_conversation_history(session_id, limit=5)
+        chat_history = "\n".join([
+            f"{msg.get_role_display()}: {msg.content}"
+            for msg in recent_messages
         ])
+        return ask_llm_direct(
+            question=question,
+            chat_history=chat_history,
+            llm_model_name=llm_model_name
+        )
     
     # Load vector store
     vector_store = get_cached_vector_store(vector_db_key, embedding_model_name)
     
     if vector_store is None:
-        return iter([
-            "Xin lỗi, kho dữ liệu của tài liệu này chưa có nội dung. "
-            "Vui lòng tải tài liệu lên trước."
+        # Fallback về general chat nếu không có vector store
+        print('⚠️  [RAG] Không có vector store, fallback về general chat')
+        recent_messages = get_recent_conversation_history(session_id, limit=5)
+        chat_history = "\n".join([
+            f"{msg.get_role_display()}: {msg.content}"
+            for msg in recent_messages
         ])
+        return ask_llm_direct(
+            question=question,
+            chat_history=chat_history,
+            llm_model_name=llm_model_name
+        )
     
     # Memory-Augmented Retrieval
     if use_memory_augmentation:
