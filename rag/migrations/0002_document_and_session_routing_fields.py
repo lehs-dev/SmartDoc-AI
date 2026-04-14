@@ -44,7 +44,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='chatsession',
             name='llm_model',
-            field=models.CharField(choices=[('gemma4:e2b', 'gemma4:e2b'), ('qwen3.5:0.8b', 'qwen3.5:0.8b'), ('qwen3.5:2b', 'qwen3.5:2b'), ('qwen3.5:4b', 'qwen3.5:4b'), ('qwen3.5:9b', 'qwen3.5:9b')], default='gemma4:e2b', max_length=50),
+            field=models.CharField(choices=[('gemma4:e4b', 'gemma4:e4b'), ('qwen3.5:0.8b', 'qwen3.5:0.8b'), ('qwen3.5:2b', 'qwen3.5:2b'), ('qwen3.5:4b', 'qwen3.5:4b'), ('qwen3.5:9b', 'qwen3.5:9b')], default='gemma4:e4b', max_length=50),
         ),
         migrations.AddField(
             model_name='chatsession',

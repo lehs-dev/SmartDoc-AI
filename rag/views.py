@@ -3,10 +3,13 @@ from django.contrib import messages
 from .models import Document, ChatSession, ChatMessage
 from .utils import (
     process_document,
+    process_document_optimized,
     get_vector_store,
     ask_gemma,
+    ask_gemma_with_memory,
     route_embedding_target,
     get_available_llm_models,
+    update_conversation_memory,
 )
 import json
 from django.http import JsonResponse, StreamingHttpResponse
@@ -65,30 +68,40 @@ def index(request):
                     vector_db_key=route_info['vector_db_key'],
                 )
 
-                # Chunking ở chỗ này
-                chunks = process_document(doc.file.path, doc.file_type)
+                # Chunking với adaptive optimization
+                chunks = process_document_optimized(
+                        doc.file.path, 
+                        doc.file_type,
+                        route_info['file_size_mb'],
+                        has_vietnamese
+                    )
 
                 if chunks:
-                    get_vector_store(chunks, doc.embedding_model, doc.vector_db_key)
-                    doc.is_embedded = True
-                    doc.save(update_fields=['is_embedded'])
+                    # Vectorize và lưu vào FAISS
+                    try:
+                        get_vector_store(chunks, doc.embedding_model, doc.vector_db_key)
+                        doc.is_embedded = True
+                        doc.save(update_fields=['is_embedded'])
 
-                    # Nếu đang trong 1 session thì tự gắn tài liệu vừa upload vào session đó.
-                    if current_session:
-                        current_session.document = doc
-                        current_session.embedding_model = doc.embedding_model
-                        current_session.vector_db_key = doc.vector_db_key
-                        current_session.save(update_fields=['document', 'embedding_model', 'vector_db_key'])
+                        # Nếu đang trong 1 session thì tự gắn tài liệu vừa upload vào session đó.
+                        if current_session:
+                            current_session.document = doc
+                            current_session.embedding_model = doc.embedding_model
+                            current_session.vector_db_key = doc.vector_db_key
+                            current_session.save(update_fields=['document', 'embedding_model', 'vector_db_key'])
 
-                    messages.success(
-                        request,
-                        (
-                            f'Tải thành công: {doc.filename}. '
-                            f'Đã chia {len(chunks)} đoạn | '
-                            f'Embedding: {doc.embedding_model} | '
-                            f'Kho vector: {doc.vector_db_key}'
+                        messages.success(
+                            request,
+                            (
+                                f'Tải thành công: {doc.filename}. '
+                                f'Đã chia {len(chunks)} đoạn | '
+                                f'Embedding: {doc.embedding_model} | '
+                                f'Kho vector: {doc.vector_db_key}'
+                            )
                         )
-                    )
+                    except Exception as e:
+                        messages.error(request, f'Lỗi khi vector hóa: {str(e)}')
+                        print(f"Vectorization error: {e}")
                 else:
                     messages.warning(request, 'Đã tải file nhưng không tìm thấy dữ liệu để nhúng')
 
@@ -123,7 +136,7 @@ def chat_api(request):
             data = json.loads(request.body or '{}')
             user_question = (data.get('message') or '').strip()
             session_id = data.get('session_id')
-            llm_model_name = (data.get('llm_model') or 'gemma4:e2b').strip()
+            llm_model_name = (data.get('llm_model') or 'gemma4:e4b').strip()
             document_id = data.get('document_id')
 
             if llm_model_name not in get_available_llm_models():
@@ -150,26 +163,18 @@ def chat_api(request):
             session.vector_db_key = selected_doc.vector_db_key
             session.save(update_fields=['document', 'llm_model', 'embedding_model', 'vector_db_key'])
 
-            # LẤY TRÍ NHỚ: Rút 6 tin nhắn gần nhất (trước khi lưu tin mới)
-            past_messages = ChatMessage.objects.filter(session=session).order_by('-created_at')[:6]
-            # Lật ngược lại để chat cũ nằm trên, chat mới nằm dưới
-            past_messages = reversed(list(past_messages))
-
-            chat_history_text = ""
-            for msg in past_messages:
-                role_name = "Người dùng" if msg.role == 'user' else "SmartDoc AI"
-                chat_history_text += f"{role_name}: {msg.content}\n"
-
-            # Lưu câu hỏi mới của User
+            # Lưu câu hỏi mới của User trước khi gọi AI
             ChatMessage.objects.create(session=session, role='user', content=user_question)
 
-            # Truyền thêm chat_history_text vào
-            stream_response = ask_gemma(
-                user_question,
-                chat_history_text,
+            # MEMORY-AUGMENTED RAG: Sử dụng ask_gemma_with_memory thay vì ask_gemma
+            # Tích hợp: Short-term memory (recent messages) + Long-term memory (summary) + Semantic memory (FAISS)
+            stream_response = ask_gemma_with_memory(
+                question=user_question,
+                session_id=session.id,
                 llm_model_name=llm_model_name,
                 embedding_model_name=selected_doc.embedding_model,
                 vector_db_key=selected_doc.vector_db_key,
+                use_memory_augmentation=True  # BẬT memory augmentation
             )
 
             def generate_stream():
@@ -189,6 +194,12 @@ def chat_api(request):
                 # Lưu câu trả lời của AI
                 if full_answer.strip():
                     ChatMessage.objects.create(session=session, role='ai', content=full_answer)
+                
+                # Update memory sau khi hoàn thành câu trả lời (non-blocking)
+                try:
+                    update_conversation_memory(session.id)
+                except Exception as e:
+                    print(f"Lỗi khi update memory: {e}")
 
             response = StreamingHttpResponse(generate_stream(), content_type="text/plain; charset=utf-8")
             response['X-Session-Id'] = str(session.id)
