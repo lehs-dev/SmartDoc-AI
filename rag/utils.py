@@ -23,8 +23,8 @@ SUPPORTED_LLM_MODELS = [
 ]
 
 SUPPORTED_EMBEDDING_MODELS = [
-    "nomic-embed-text",      # ✅ Bạn đã pull
-    "bge-m3:567m",           # ✅ Bạn đã pull
+    "nomic-embed-text",      
+    "bge-m3:567m",           
     "nomic-embed-text-v2-moe",
     "qwen3-embedding:0.6b",
 ]
@@ -143,6 +143,68 @@ def _build_llm_kwargs(resolved_model_name):
         })
 
     return model_kwargs
+
+def _build_ollama_options(model_name):
+    if _is_small_cpu_model(model_name):
+        return {
+            'temperature': 0.2,
+            'repeat_penalty': 1.1,
+            'top_k': 40,
+            'top_p': 0.9,
+            'num_ctx': 1024,
+            'num_predict': 128,
+        }
+
+    return {
+        'temperature': 0.7,
+        'num_ctx': 4096,
+        'num_predict': 512,
+    }
+
+
+def _extract_ollama_content(response_item):
+    if isinstance(response_item, dict):
+        message = response_item.get('message') or {}
+        if isinstance(message, dict):
+            return (message.get('content') or '').strip()
+        return (getattr(message, 'content', '') or '').strip()
+
+    message = getattr(response_item, 'message', None)
+    if isinstance(message, dict):
+        return (message.get('content') or '').strip()
+
+    return (getattr(message, 'content', '') or '').strip()
+
+
+def _ollama_chat_stream(prompt, model_name):
+    response = ollama.chat(
+        model=model_name,
+        messages=[{'role': 'user', 'content': prompt}],
+        options=_build_ollama_options(model_name),
+        keep_alive='15m',
+        stream=True,
+    )
+
+    for chunk in response:
+        content = _extract_ollama_content(chunk)
+        if content:
+            yield content
+
+
+def _ollama_chat_invoke(prompt, model_name):
+    response = ollama.chat(
+        model=model_name,
+        messages=[{'role': 'user', 'content': prompt}],
+        options=_build_ollama_options(model_name),
+        keep_alive='15m',
+        stream=False,
+    )
+
+    content = _extract_ollama_content(response)
+    if content:
+        return content
+
+    return str(response).strip()
 
 
 def get_installed_ollama_models(refresh=False):
@@ -633,15 +695,11 @@ def ask_llm_direct(
     print('\n💬 [GENERAL CHAT] Đang trả lời không cần RAG...')
     
     if _is_small_cpu_model(llm_model_name):
-        prompt_template = """Bạn là SmartDoc AI.
-
-Lịch sử chat:
+        prompt_template = """Trả lời ngắn gọn bằng tiếng Việt, chỉ trả lời đáp án cuối cùng.
+Lịch sử ngắn:
 {chat_history}
 
-Câu hỏi:
-{question}
-
-Trả lời ngắn gọn, rõ ràng, bằng tiếng Việt:"""
+Câu hỏi: {question}"""
     else:
         prompt_template = """Bạn là SmartDoc AI - một trợ lý AI hữu ích, thân thiện và thông minh.
 
@@ -667,11 +725,19 @@ Trả lời:"""
     )
     
     print(f'🤖 [GENERAL CHAT] Sử dụng model: {llm_model_name}')
+    formatted_prompt = prompt.format(
+        chat_history=_truncate_text(chat_history, 220 if _is_small_cpu_model(llm_model_name) else 2200),
+        question=question,
+    )
+
+    if _is_small_cpu_model(llm_model_name):
+        return _ollama_chat_stream(formatted_prompt, llm_model_name)
+
     llm = get_llm_model(llm_model_name)
     chain = prompt | llm
     
     return chain.stream({
-        "chat_history": _truncate_text(chat_history, 900 if _is_small_cpu_model(llm_model_name) else 2200),
+        "chat_history": _truncate_text(chat_history, 2200),
         "question": question
     })
 
@@ -779,9 +845,15 @@ Tóm tắt (tiếng Việt, ngắn gọn):
     )
     
     try:
-        llm = get_llm_model(llm_model_name)
-        chain = prompt | llm
-        summary = chain.invoke({"conversation": conversation_text})
+        if _is_small_cpu_model(llm_model_name):
+            recent_lines = []
+            for msg in list(messages)[-4:]:
+                recent_lines.append(f"{msg.role}: {msg.content}")
+            summary = _truncate_text("\n".join(recent_lines), 600)
+        else:
+            llm = get_llm_model(llm_model_name)
+            chain = prompt | llm
+            summary = chain.invoke({"conversation": conversation_text})
         return summary.strip()
     except Exception as e:
         print(f"Lỗi khi nén bộ nhớ: {e}")
@@ -819,12 +891,15 @@ JSON:
     )
     
     try:
-        llm = get_llm_model(llm_model_name)
-        chain = prompt | llm
-        result = chain.invoke({"conversation": conversation_text})
+        if _is_small_cpu_model(llm_model_name):
+            return {"entities": [], "facts": [], "numbers": []}
+        else:
+            llm = get_llm_model(llm_model_name)
+            chain = prompt | llm
+            result_text = chain.invoke({"conversation": conversation_text})
         
         # Parse JSON
-        result_text = result.strip()
+        result_text = result_text.strip()
         # Remove markdown code blocks nếu có
         if result_text.startswith("```"):
             result_text = result_text.split("```")[1]
@@ -884,6 +959,277 @@ def update_conversation_memory(session_id, force_update=False):
         'user_preferences': memory.user_preferences
     })
     
+    return memory
+
+
+def retrieve_with_memory_augmentation(
+    question,
+    session_id,
+    vector_store,
+    k_chunks=2,
+    k_memories=1
+):
+    """
+    Memory-Augmented Retrieval: Kết hợp retrieval từ nhiều nguồn
+    1. Short-term: Last N messages (Conversation Buffer)
+    2. Long-term: ConversationMemory summary (Summary Memory)
+    3. Semantic: FAISS document chunks (Semantic Memory)
+    
+    Returns:
+        dict: {
+            'recent_messages': list of ChatMessage,
+            'memory_context': str (summary),
+            'key_facts': dict,
+            'document_chunks': list of Document chunks,
+            'combined_context': str (tất cả context)
+        }
+    """
+    result = {
+        'recent_messages': [],
+        'memory_context': '',
+        'key_facts': {},
+        'document_chunks': [],
+        'combined_context': ''
+    }
+
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        return result
+    
+    # 1. Get short-term memory (recent messages)
+    recent_messages = get_recent_conversation_history(session_id, limit=5)
+    result['recent_messages'] = recent_messages
+    
+    # 2. Get long-term memory (summary + facts)
+    try:
+        conv_memory = get_or_create_conversation_memory(session_id)
+        if conv_memory is not None:
+            result['memory_context'] = conv_memory.summary
+        
+            if conv_memory.key_facts:
+                try:
+                    result['key_facts'] = json.loads(conv_memory.key_facts)
+                except:
+                    result['key_facts'] = {}
+    except Exception as e:
+        print(f"Lỗi khi lấy memory: {e}")
+    
+    # 3. Get semantic memory (FAISS retrieval)
+    if vector_store:
+        retriever = vector_store.as_retriever(search_kwargs={'k': k_chunks})
+        relevant_docs = retriever.invoke(question)
+        result['document_chunks'] = relevant_docs
+    
+    # 4. Build combined context
+    context_parts = []
+    
+    # Add memory context first (priority)
+    if result['memory_context']:
+        context_parts.append(f"=== TÓM TẮT HỘI THOẠI ===\n{result['memory_context']}")
+    
+    # Add key facts
+    if result['key_facts']:
+        facts_text = "=== SỰ KIỆN QUAN TRỌNG ===\n"
+        if result['key_facts'].get('entities'):
+            facts_text += f"Entities: {', '.join(result['key_facts']['entities'])}\n"
+        if result['key_facts'].get('facts'):
+            facts_text += f"Facts: {'; '.join(result['key_facts']['facts'])}\n"
+        if result['key_facts'].get('numbers'):
+            facts_text += f"Numbers: {', '.join(result['key_facts']['numbers'])}\n"
+        context_parts.append(facts_text)
+    
+    # Add document chunks
+    if result['document_chunks']:
+        doc_context = "\n\n".join([doc.page_content for doc in result['document_chunks']])
+        context_parts.append(f"=== THÔNG TIN TÀI LIỆU ===\n{doc_context}")
+    
+    result['combined_context'] = "\n\n".join(context_parts)
+    
+    return result
+def get_recent_conversation_history(session_id, limit=5):
+    """
+    Lấy lịch sử hội thoại gần đây (Short-term Memory)
+    Memory-Augmented RAG: Conversation Buffer Memory
+    """
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        return []
+
+    messages = ChatMessage.objects.filter(
+        session_id=session_id
+    ).order_by('-created_at')[:limit]
+    
+    # Đảo ngược để theo thứ tự thời gian
+    return list(reversed(messages))
+
+
+def get_or_create_conversation_memory(session_id):
+    """
+    Lấy hoặc tạo ConversationMemory (Long-term Memory)
+    Memory-Augmented RAG: Summary Memory
+    """
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        print(f"Lỗi khi lấy memory: session_id không hợp lệ ({session_id})")
+        return None
+
+    try:
+        memory = ConversationMemory.objects.get(session_id=session_id)
+        return memory
+    except ConversationMemory.DoesNotExist:
+        # Tạo memory mới nếu chưa tồn tại
+        try:
+            session = ChatSession.objects.get(id=session_id)
+        except ChatSession.DoesNotExist:
+            print(f"Lỗi khi tạo memory: session {session_id} không tồn tại")
+            return None
+
+        memory = ConversationMemory.objects.create(
+            session=session,
+            memory_type='summary'
+        )
+        return memory
+
+
+def compress_conversation_to_summary(messages, llm_model_name="gemma4:e2b"):
+    """
+    Nén lịch sử hội thoại thành summary bằng LLM
+    Memory-Augmented RAG: Memory Compression
+    """
+    if not messages:
+        return ""
+    
+    # Format conversation
+    conversation_text = "\n".join([
+        f"{msg.role}: {msg.content}" for msg in messages
+    ])
+    
+    prompt_template = """
+Bạn là trợ lý AI. Hãy tóm tắt hội thoại sau thành các ý chính quan trọng.
+Chỉ giữ lại: sự kiện, thông tin, con số, tên riêng, khái niệm quan trọng.
+Bỏ qua: lời chào hỏi, câu hỏi lặp, thông tin không quan trọng.
+
+Hội thoại:
+{conversation}
+
+Tóm tắt (tiếng Việt, ngắn gọn):
+"""
+    
+    prompt = PromptTemplate(
+        template=prompt_template,
+        input_variables=["conversation"]
+    )
+    
+    try:
+        if _is_small_cpu_model(llm_model_name):
+            recent_lines = []
+            for msg in list(messages)[-4:]:
+                recent_lines.append(f"{msg.role}: {msg.content}")
+            summary = _truncate_text("\n".join(recent_lines), 600)
+        else:
+            llm = get_llm_model(llm_model_name)
+            chain = prompt | llm
+            summary = chain.invoke({"conversation": conversation_text})
+        return summary.strip()
+    except Exception as e:
+        print(f"Lỗi khi nén bộ nhớ: {e}")
+        return ""
+
+
+def extract_key_facts_from_conversation(messages, llm_model_name="gemma4:e2b"):
+    """
+    Trích xuất các sự kiện quan trọng từ hội thoại
+    Memory-Augmented RAG: Entity Memory
+    """
+    if not messages:
+        return {}
+    
+    conversation_text = "\n".join([
+        f"{msg.role}: {msg.content}" for msg in messages
+    ])
+    
+    prompt_template = """
+Trích xuất thông tin quan trọng từ hội thoại sau.
+Trả về JSON với các key:
+
+Hội thoại:
+{conversation}
+
+JSON:
+"""
+    
+    prompt = PromptTemplate(
+        template=prompt_template,
+        input_variables=["conversation"]
+    )
+    
+    try:
+        if _is_small_cpu_model(llm_model_name):
+            return {"entities": [], "facts": [], "numbers": []}
+        else:
+            llm = get_llm_model(llm_model_name)
+            chain = prompt | llm
+            result_text = chain.invoke({"conversation": conversation_text})
+        
+        # Parse JSON
+        result_text = result_text.strip()
+        # Remove markdown code blocks nếu có
+        if result_text.startswith("```"):
+            result_text = result_text.split("```")[1]
+            if result_text.startswith("json"):
+                result_text = result_text[4:]
+        
+        facts_dict = json.loads(result_text.strip())
+        return facts_dict
+    except Exception as e:
+        print(f"Lỗi khi trích xuất sự kiện: {e}")
+        return {"entities": [], "facts": [], "numbers": []}
+
+
+def update_conversation_memory(session_id, force_update=False):
+    """
+    Cập nhật ConversationMemory từ lịch sử hội thoại
+    Memory-Augmented RAG: Memory Update Strategy
+    """
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        print(f"Lỗi khi update memory: session_id không hợp lệ ({session_id})")
+        return None
+
+    # Lấy toàn bộ messages
+    messages = ChatMessage.objects.filter(
+        session_id=session_id
+    ).order_by('created_at')
+    
+    if messages.count() == 0:
+        return None
+    
+    # Chỉ update nếu có >= 3 messages hoặc force_update
+    if messages.count() < 3 and not force_update:
+        return get_or_create_conversation_memory(session_id)
+    
+    # Lấy memory hiện tại
+    memory = get_or_create_conversation_memory(session_id)
+    if memory is None:
+        return None
+    
+    # Nén conversation thành summary
+    summary = compress_conversation_to_summary(messages)
+    if summary:
+        memory.summary = summary
+    
+    # Trích xuất key facts
+    facts = extract_key_facts_from_conversation(messages)
+    if facts:
+        memory.key_facts = json.dumps(facts, ensure_ascii=False)
+    
+    memory.save(update_fields=['summary', 'key_facts', 'last_updated'])
+    
+    # Update cache
+    update_memory_cache(session_id, {
+        'summary': memory.summary,
+    })
+
     return memory
 
 
