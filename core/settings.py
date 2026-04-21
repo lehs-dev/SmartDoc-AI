@@ -134,3 +134,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Đường dẫn file được upload
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Giới hạn kích thước upload (50MB + overhead)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52_428_800   # ~50MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 52_428_800   # ~50MB

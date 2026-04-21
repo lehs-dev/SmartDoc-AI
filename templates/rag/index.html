@@ -7,7 +7,6 @@
 
 {% block content %}
 {% csrf_token %}
-
 <div class="app-shell">
 
     <!-- ── Sidebar ───────────────────────────── -->
@@ -30,15 +29,16 @@
                     <span class="history-item-title">{{ s.title }}</span>
                     <span class="history-item-time">{{ s.created_at|date:"d/m H:i" }}</span>
                 </a>
-                <button type="button" class="history-item-delete" data-session-id="{{ s.id }}"
-                    data-session-title="{{ s.title|escape }}" title="Xóa hội thoại">
+                <button type="button" class="history-item-delete"
+                    data-session-id="{{ s.id }}"
+                    data-session-title="{{ s.title|escape }}"
+                    title="Xóa hội thoại">
                     <i class="bi bi-trash3"></i>
                 </button>
             </div>
             {% empty %}
             <div class="history-empty">
-                <i class="bi bi-clock-history"></i>
-                Chưa có lịch sử chat
+                <i class="bi bi-clock-history"></i> Chưa có lịch sử chat
             </div>
             {% endfor %}
         </div>
@@ -48,8 +48,10 @@
     <div class="main">
 
         {# chat-area gets is-empty when no messages → centers the input #}
-        <div id="chat-area" class="chat-area {% if not current_messages %}is-empty{% endif %}"
-            data-session-id="{{ current_session_id|default_if_none:'' }}">
+        <div id="chat-area"
+            class="chat-area {% if not current_messages %}is-empty{% endif %}"
+            data-session-id="{{ current_session_id|default_if_none:'' }}"
+            data-document-id="{{ current_document_id|default_if_none:'' }}">
 
             <!-- Mode badge (visible once a session exists) -->
             {% if current_session_id %}
@@ -68,15 +70,12 @@
             <div id="mode-badge" class="mode-badge" style="display:none;"></div>
             {% endif %}
 
-            <!-- <div id="chat-status" class="chat-status" aria-live="polite" style="display:none;"></div> -->
-
             <!-- Welcome screen (hidden once first message sent) -->
             {% if not current_messages %}
             <div id="welcome-section" class="welcome-wrap">
                 <div class="welcome-icon">✦</div>
                 <h1 class="welcome-title">Chúng ta nên bắt đầu từ đâu nhỉ?</h1>
                 <p class="welcome-subtitle">SmartDoc AI – trợ lý thông minh của bạn</p>
-
                 <div class="suggestion-grid">
                     <button class="suggestion-card" data-suggestion="Giải thích khái niệm machine learning">
                         <div class="suggestion-icon">💡</div>
@@ -99,7 +98,7 @@
             {% endif %}
 
             <!-- Message list -->
-            <div id="messages-wrap" class="messages-wrap" {% if not current_messages %}style="display:none;" {% endif %}>
+            <div id="messages-wrap" class="messages-wrap" {% if not current_messages %}style="display:none;"{% endif %}>
                 <div id="messages-inner" class="messages-inner">
                     {% for msg in current_messages %}
                     <div class="msg {% if msg.role == 'user' %}msg-user{% else %}msg-ai{% endif %}">
@@ -120,9 +119,10 @@
             <!-- Input box -->
             <div class="input-wrap">
                 <div class="input-box">
-                    <textarea id="chat-input" class="input-textarea" placeholder="Nhập câu hỏi của bạn…" rows="1"
+                    <textarea id="chat-input" class="input-textarea"
+                        placeholder="Nhập câu hỏi của bạn…"
+                        rows="1"
                         autocomplete="off"></textarea>
-
                     <div class="input-toolbar">
                         <div class="toolbar-left">
                             <button type="button" id="upload-btn" class="toolbar-btn" title="Tải tài liệu lên">
@@ -130,11 +130,13 @@
                             </button>
                         </div>
                         <div class="toolbar-right">
-                            <select id="llm-model" class="model-select" title="Chọn model">
-                                {% for model in llm_models %}
-                                <option value="{{ model }}" {% if model == default_llm_model %}selected{% endif %}>
-                                    {{ model }}
+                            <select id="document-select" class="model-select document-select" title="Chọn tài liệu">
+                                <option value="" {% if not current_document_id %}selected{% endif %}>Chat thường (không dùng tài liệu)</option>
+                                {% for doc in embedded_documents %}
+                                <option value="{{ doc.id }}" {% if current_document_id == doc.id|stringformat:'s' %}selected{% endif %}>
+                                    {{ doc.filename }}
                                 </option>
+                                {% empty %}
                                 {% endfor %}
                             </select>
                             <button type="button" id="send-btn" class="send-btn" title="Gửi (Enter)">
@@ -164,17 +166,16 @@
                     Chọn file PDF hoặc DOCX
                     <small>hoặc kéo thả file vào đây</small>
                 </div>
+                <div id="upload-filename" class="file-drop-filename">Chưa chọn file</div>
             </div>
-
             <label class="checkbox-row">
-                <input type="checkbox" name="has_vietnamese" value="on">
-                Tài liệu có tiếng Việt
+                <input type="checkbox" name="has_vietnamese" value="on"> Tài liệu có tiếng Việt
             </label>
-
             <div class="modal-actions">
                 <button type="button" id="cancel-upload" class="btn-ghost">Hủy</button>
                 <button type="submit" class="btn-primary">Tải lên</button>
             </div>
+            <div id="upload-status" class="upload-status" aria-live="polite"></div>
         </form>
     </div>
 </div>
@@ -206,8 +207,9 @@
     {% endfor %}
 </div>
 {% endif %}
+
 {% endblock %}
 
 {% block extra_js %}
-<script src="{% static 'js/chat.js' %}"></script>
+<script src="{% static 'js/chat.js' %}?v=20260421"></script>
 {% endblock %}

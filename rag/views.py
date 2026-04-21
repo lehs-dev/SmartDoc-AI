@@ -9,11 +9,58 @@ from .utils import (
     ask_gemma_with_memory,
     route_embedding_target,
     get_available_llm_models,
+    resolve_llm_model,
     update_conversation_memory,
 )
 import json
 from django.http import JsonResponse, StreamingHttpResponse
 
+
+# ============================================================================
+# UPLOAD VALIDATION: MIME type + File size limit
+# ============================================================================
+
+MAX_UPLOAD_SIZE_MB = 50
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+# Magic bytes cho kiểm tra MIME type
+_PDF_MAGIC = b'%PDF'
+_DOCX_MAGIC = b'PK'  # DOCX là ZIP format
+
+
+def _validate_upload(uploaded_file):
+    """
+    Kiểm tra tính hợp lệ của file upload:
+    - Kích thước file không vượt MAX_UPLOAD_SIZE_MB
+    - MIME type khớp với extension (chống giả mạo file)
+    
+    Returns:
+        tuple: (is_valid: bool, error_message: str)
+    """
+    # Kiểm tra kích thước file
+    if uploaded_file.size > MAX_UPLOAD_SIZE_BYTES:
+        size_mb = uploaded_file.size / (1024 * 1024)
+        return False, (
+            f'File quá lớn ({size_mb:.1f}MB). '
+            f'Giới hạn tối đa: {MAX_UPLOAD_SIZE_MB}MB'
+        )
+    
+    # Kiểm tra MIME type qua magic bytes
+    try:
+        header = uploaded_file.read(8)
+        uploaded_file.seek(0)  # Reset vị trí đọc về đầu
+    except Exception:
+        return False, 'Không thể đọc file header'
+    
+    lower_name = uploaded_file.name.lower()
+    
+    if lower_name.endswith('.pdf') and not header.startswith(_PDF_MAGIC):
+        return False, 'File PDF không hợp lệ (nội dung không phải PDF thật)'
+    
+    if lower_name.endswith('.docx') and not header.startswith(_DOCX_MAGIC):
+        return False, 'File DOCX không hợp lệ (nội dung không phải DOCX thật)'
+    
+    return True, ''
 
 def _resolve_document_for_chat(document_id, session=None):
     if document_id:
@@ -47,6 +94,20 @@ def index(request):
         has_vietnamese = request.POST.get('has_vietnamese') == 'on'
 
         if uploaded_file:
+            # Validation: MIME type + kích thước file
+            is_valid, validation_error = _validate_upload(uploaded_file)
+            if not is_valid:
+                messages.error(request, validation_error)
+                return render(request, 'rag/index.html', {
+                    'sessions': sessions,
+                    'embedded_documents': embedded_documents,
+                    'llm_models': llm_models,
+                    'current_session_id': current_session_id,
+                    'current_messages': current_messages,
+                    'current_document_id': '',
+                    'default_llm_model': llm_models[0] if llm_models else 'gemma4:e4b',
+                })
+            
             lower_name = uploaded_file.name.lower()
             if lower_name.endswith('.pdf'):
                 file_extension = 'pdf'
@@ -136,11 +197,8 @@ def chat_api(request):
             data = json.loads(request.body or '{}')
             user_question = (data.get('message') or '').strip()
             session_id = data.get('session_id')
-            llm_model_name = (data.get('llm_model') or 'gemma4:e4b').strip()
             document_id = data.get('document_id')
-
-            if llm_model_name not in get_available_llm_models():
-                return JsonResponse({'error': f'LLM model không hợp lệ: {llm_model_name}'}, status=400)
+            force_general = bool(data.get('force_general'))
 
             if not user_question:
                 return JsonResponse({'error': 'Phải nhập câu hỏi'}, status=400)
@@ -154,15 +212,18 @@ def chat_api(request):
                 # Tạo session mới với mode='general' mặc định
                 session = ChatSession.objects.create(
                     title=title, 
-                    llm_model=llm_model_name,
+                    llm_model='gemma4:e2b',
                     mode='general'  # Mặc định là general chat
                 )
 
             # Kiểm tra xem có document không để xác định mode
-            selected_doc = _resolve_document_for_chat(document_id, session=session)
+            selected_doc = None
+            if not force_general:
+                selected_doc = _resolve_document_for_chat(document_id, session=session)
             
             if selected_doc and selected_doc.is_embedded:
                 # Có document → RAG mode
+                llm_model_name = resolve_llm_model('gemma4:e4b')
                 session.document = selected_doc
                 session.llm_model = llm_model_name
                 session.embedding_model = selected_doc.embedding_model
@@ -174,9 +235,13 @@ def chat_api(request):
                 print(f"✅ [CHAT] RAG Mode - Document: {selected_doc.filename}")
             else:
                 # Không có document → General Chat mode
+                llm_model_name = resolve_llm_model('gemma4:e2b')
+                session.document = None
+                session.embedding_model = ''
+                session.vector_db_key = ''
                 session.llm_model = llm_model_name
                 session.mode = 'general'
-                session.save(update_fields=['llm_model', 'mode'])
+                session.save(update_fields=['document', 'embedding_model', 'vector_db_key', 'llm_model', 'mode'])
                 
                 is_rag_mode = False
                 print(f"💬 [CHAT] General Mode - Không có document")

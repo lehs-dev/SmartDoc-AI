@@ -14,7 +14,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const uploadModal = document.getElementById('upload-modal');
     const cancelUpload = document.getElementById('cancel-upload');
     const uploadForm = document.getElementById('upload-form');
-    const llmModelSelect = document.getElementById('llm-model');
+    const fileDropZone = document.querySelector('.file-drop-zone');
+    const documentSelect = document.getElementById('document-select');
+    const documentInput = document.getElementById('document-input');
+    const uploadFilename = document.getElementById('upload-filename');
+    const uploadStatus = document.getElementById('upload-status');
     const modeBadge = document.getElementById('mode-badge');
     const chatStatus = document.getElementById('chat-status');
     const toastContainer = document.getElementById('toast-container');
@@ -24,7 +28,21 @@ document.addEventListener('DOMContentLoaded', function () {
     const confirmTarget = document.getElementById('delete-confirm-target');
 
     let currentSessionId = chatArea?.dataset.sessionId || '';
+    let currentDocumentId = chatArea?.dataset.documentId || '';
     const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+
+    if (documentSelect && documentSelect.value) {
+        currentDocumentId = documentSelect.value;
+    }
+
+    if (documentSelect) {
+        documentSelect.addEventListener('change', () => {
+            currentDocumentId = documentSelect.value || '';
+            if (chatArea) {
+                chatArea.dataset.documentId = currentDocumentId;
+            }
+        });
+    }
 
     /* ── Helpers ────────────────────────────────── */
     function scrollToBottom() {
@@ -57,6 +75,12 @@ document.addEventListener('DOMContentLoaded', function () {
             toast.classList.remove('is-visible');
             setTimeout(() => toast.remove(), 180);
         }, 3200);
+    }
+
+    function updateSelectedFilename() {
+        if (!uploadFilename) return;
+        const selectedFile = documentInput && documentInput.files && documentInput.files[0];
+        uploadFilename.textContent = selectedFile ? selectedFile.name : 'Chưa chọn file';
     }
 
     function switchToConversation() {
@@ -100,12 +124,24 @@ document.addEventListener('DOMContentLoaded', function () {
     /* ── Upload modal ───────────────────────────── */
     if (uploadBtn) {
         uploadBtn.addEventListener('click', () => {
+            if (!uploadModal) return;
             uploadModal.classList.add('is-open');
+            updateSelectedFilename();
+            if (uploadStatus) {
+                uploadStatus.textContent = '';
+                uploadStatus.classList.remove('is-busy');
+            }
         });
     }
 
     if (cancelUpload) {
-        cancelUpload.addEventListener('click', () => uploadModal.classList.remove('is-open'));
+        cancelUpload.addEventListener('click', () => {
+            uploadModal.classList.remove('is-open');
+            if (uploadStatus) {
+                uploadStatus.textContent = '';
+                uploadStatus.classList.remove('is-busy');
+            }
+        });
     }
 
     if (uploadModal) {
@@ -114,15 +150,54 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    if (fileDropZone) {
+        fileDropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileDropZone.classList.add('is-dragover');
+        });
+
+        fileDropZone.addEventListener('dragleave', () => {
+            fileDropZone.classList.remove('is-dragover');
+        });
+
+        fileDropZone.addEventListener('drop', () => {
+            fileDropZone.classList.remove('is-dragover');
+        });
+    }
+
+    if (documentInput) {
+        documentInput.addEventListener('change', updateSelectedFilename);
+        documentInput.addEventListener('input', updateSelectedFilename);
+    }
+
     if (uploadForm) {
         uploadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (!documentInput || !documentInput.files || !documentInput.files.length) {
+                showToast('Bạn chưa chọn file để tải lên', 'warning');
+                return;
+            }
+
+            const submitBtn = uploadForm.querySelector('button[type="submit"]');
+            const submitLabel = submitBtn ? submitBtn.textContent : '';
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Đang xử lý...';
+            }
+            if (cancelUpload) {
+                cancelUpload.disabled = true;
+            }
+            if (uploadStatus) {
+                uploadStatus.textContent = 'Đang tải và xử lý tài liệu...';
+                uploadStatus.classList.add('is-busy');
+            }
             const formData = new FormData(uploadForm);
 
             try {
                 const response = await fetch(window.location.href, {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    credentials: 'same-origin'
                 });
 
                 if (response.ok) {
@@ -131,10 +206,26 @@ document.addEventListener('DOMContentLoaded', function () {
                     setTimeout(() => window.location.reload(), 1500);
                 } else {
                     const err = await response.text();
+                    if (uploadStatus) {
+                        uploadStatus.textContent = 'Tải tài liệu thất bại. Vui lòng thử lại.';
+                        uploadStatus.classList.remove('is-busy');
+                    }
                     showToast('Lỗi: ' + err, 'danger');
                 }
             } catch {
+                if (uploadStatus) {
+                    uploadStatus.textContent = 'Không thể kết nối server. Vui lòng thử lại.';
+                    uploadStatus.classList.remove('is-busy');
+                }
                 showToast('Không thể kết nối server', 'danger');
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = submitLabel || 'Tải lên';
+                }
+                if (cancelUpload) {
+                    cancelUpload.disabled = false;
+                }
             }
         });
     }
@@ -144,7 +235,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const message = chatInput.value.trim();
         if (!message) return;
 
-        const selectedModel = llmModelSelect?.value || '';
         let responseStarted = false;
 
         // Clear + reset height
@@ -193,8 +283,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 body: JSON.stringify({
                     message,
                     session_id: currentSessionId || null,
-                    llm_model: selectedModel,
-                    document_id: null
+                    document_id: currentDocumentId || null,
+                    force_general: !currentDocumentId
                 })
             });
 
@@ -205,10 +295,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
             const newSessionId = response.headers.get('X-Session-Id');
             const mode = response.headers.get('X-Mode');
+            const newDocumentId = response.headers.get('X-Document-Id');
 
             if (newSessionId && !currentSessionId) {
                 currentSessionId = newSessionId;
                 window.history.pushState({}, '', `/?session=${newSessionId}`);
+            }
+
+            if (newDocumentId) {
+                currentDocumentId = newDocumentId;
+                if (documentSelect) {
+                    documentSelect.value = newDocumentId;
+                }
+                if (chatArea) {
+                    chatArea.dataset.documentId = newDocumentId;
+                }
             }
 
             // Mode badge update
@@ -242,7 +343,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     setChatStatus('Đang sinh câu trả lời...', 'thinking');
                 }
 
-                aiContent += decoder.decode(value);
+                aiContent += decoder.decode(value, { stream: true });
 
                 if (!aiEl) {
                     aiEl = document.createElement('div');

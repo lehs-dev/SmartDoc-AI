@@ -32,6 +32,7 @@ Jinja2==3.1.6
 joblib==1.5.3
 jsonpatch==1.33
 jsonpointer==3.1.1
+json_repair==0.44.1
 langchain==1.2.15
 langchain-classic==1.0.3
 langchain-community==0.4.1
@@ -75,6 +76,7 @@ packaging==26.0
 pdfminer.six==20251230
 pdfplumber==0.11.9
 pillow==12.2.0
+PyMuPDF==1.25.5
 propcache==0.4.1
 pycparser==3.0
 pydantic==2.12.5

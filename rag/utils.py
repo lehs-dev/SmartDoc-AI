@@ -1,4 +1,5 @@
 import os
+import re
 import pdfplumber
 import docx
 import ollama
@@ -12,6 +13,26 @@ from langchain_core.prompts import PromptTemplate
 from .models import ChatMessage, ChatSession, ConversationMemory, MemoryIndex
 
 os.environ['HF_HUB_OFFLINE'] = '1'
+
+# Cấu hình số luồng cho xử lý Vector/Toán học trên CPU
+os.environ["OMP_NUM_THREADS"] = "8"
+os.environ["OPENBLAS_NUM_THREADS"] = "8"
+os.environ["MKL_NUM_THREADS"] = "8"
+
+# PyMuPDF cho đọc PDF nhanh (fallback: pdfplumber)
+try:
+    import fitz as _fitz
+    _HAS_PYMUPDF = True
+except ImportError:
+    _HAS_PYMUPDF = False
+
+# json_repair cho parse JSON an toàn từ LLM output
+try:
+    import json_repair as _json_repair
+    _HAS_JSON_REPAIR = True
+except ImportError:
+    _HAS_JSON_REPAIR = False
+
 VECTOR_DB_BASE_PATH = "vector_store"
 
 SUPPORTED_LLM_MODELS = [
@@ -125,40 +146,46 @@ def _build_llm_kwargs(resolved_model_name):
         'keep_alive': '15m',
     }
 
+    _num_thread = min(10, max(1, (os.cpu_count() or 4) - 2))
+
     if _is_small_cpu_model(resolved_model_name):
         model_kwargs.update({
             'temperature': 0.2,
             'repeat_penalty': 1.1,
             'top_k': 40,
             'top_p': 0.9,
-            'num_ctx': 2048,
-            'num_predict': 128,
-            'num_thread': max(1, min(4, os.cpu_count() or 1)),
+            'num_ctx': 4096,
+            'num_predict': 256,
+            'num_thread': _num_thread,
         })
     else:
         model_kwargs.update({
             'temperature': 0.7,
             'num_ctx': 4096,
-            'num_thread': max(1, min(4, os.cpu_count() or 1)),
+            'num_thread': _num_thread,
         })
 
     return model_kwargs
 
 def _build_ollama_options(model_name):
+    _num_thread = min(10, max(1, (os.cpu_count() or 4) - 2))
+
     if _is_small_cpu_model(model_name):
         return {
             'temperature': 0.2,
             'repeat_penalty': 1.1,
             'top_k': 40,
             'top_p': 0.9,
-            'num_ctx': 1024,
-            'num_predict': 128,
+            'num_ctx': 4096,
+            'num_predict': 256,
+            'num_thread': _num_thread,
         }
 
     return {
         'temperature': 0.7,
         'num_ctx': 4096,
         'num_predict': 512,
+        'num_thread': _num_thread,
     }
 
 
@@ -166,14 +193,29 @@ def _extract_ollama_content(response_item):
     if isinstance(response_item, dict):
         message = response_item.get('message') or {}
         if isinstance(message, dict):
-            return (message.get('content') or '').strip()
-        return (getattr(message, 'content', '') or '').strip()
+            content = (message.get('content') or '').strip()
+            if content:
+                return content
+        else:
+            content = (getattr(message, 'content', '') or '').strip()
+            if content:
+                return content
+        response_text = response_item.get('response') or response_item.get('content')
+        return (str(response_text).strip() if response_text else '')
 
     message = getattr(response_item, 'message', None)
     if isinstance(message, dict):
-        return (message.get('content') or '').strip()
+        content = (message.get('content') or '').strip()
+        if content:
+            return content
 
-    return (getattr(message, 'content', '') or '').strip()
+    if message is not None:
+        content = (getattr(message, 'content', '') or '').strip()
+        if content:
+            return content
+
+    response_text = getattr(response_item, 'response', None) or getattr(response_item, 'content', None)
+    return (str(response_text).strip() if response_text else '')
 
 
 def _ollama_chat_stream(prompt, model_name):
@@ -189,6 +231,49 @@ def _ollama_chat_stream(prompt, model_name):
         content = _extract_ollama_content(chunk)
         if content:
             yield content
+
+
+def _stream_text_chunks(text, chunk_size=120):
+    text = text or ''
+    for i in range(0, len(text), chunk_size):
+        yield text[i:i + chunk_size]
+
+
+def _stream_with_fallback(primary_stream, fallback_stream_factory=None, fallback_label=''):
+    has_output = False
+
+    for chunk in primary_stream:
+        if not chunk:
+            continue
+        has_output = True
+        yield chunk
+
+    if not has_output and fallback_stream_factory:
+        if fallback_label:
+            print(f"⚠️  [LLM] Stream trống, fallback sang {fallback_label}")
+        for chunk in fallback_stream_factory():
+            if chunk:
+                yield chunk
+
+
+def _stream_small_model_with_fallback(prompt, model_name, fallback_model=None):
+    def _fallback_stream():
+        print("⚠️  [LLM] Stream trống, thử gọi non-stream...")
+        response_text = _ollama_chat_invoke(prompt, model_name)
+        if response_text:
+            for chunk in _stream_text_chunks(response_text):
+                yield chunk
+            return
+        if fallback_model:
+            print(f"⚠️  [LLM] Non-stream rỗng, fallback sang {fallback_model}")
+            for chunk in _ollama_chat_stream(prompt, fallback_model):
+                if chunk:
+                    yield chunk
+
+    return _stream_with_fallback(
+        _ollama_chat_stream(prompt, model_name),
+        _fallback_stream,
+    )
 
 
 def _ollama_chat_invoke(prompt, model_name):
@@ -246,6 +331,11 @@ def _find_available_model(preferred_models):
         if name in installed_set:
             return name
     return None
+
+
+def _get_llm_fallback_model(primary_model):
+    fallback_candidates = ["gemma4:e4b", "qwen3.5:4b", "qwen3.5:2b"]
+    return _find_available_model([model for model in fallback_candidates if model != primary_model])
 
 
 def resolve_llm_model(model_name):
@@ -393,16 +483,38 @@ def extract_text(file_path, file_extension):
     text = ""
     try:
         if file_extension == 'pdf':
-            print(f"📕 Processing PDF...")
-            with pdfplumber.open(file_path) as pdf:
-                print(f"📊 Số trang: {len(pdf.pages)}")
-                for i, page in enumerate(pdf.pages):
-                    extracted = page.extract_text()
-                    if extracted:
-                        text += extracted + "\n"
-                        print(f"  ✅ Trang {i+1}: {len(extracted)} ký tự")
-                    else:
-                        print(f"  ⚠️  Trang {i+1}: Không extract được text")
+            # Primary: PyMuPDF (nhanh hơn pdfplumber đáng kể)
+            if _HAS_PYMUPDF:
+                print(f"📕 Processing PDF với PyMuPDF (fast mode)...")
+                try:
+                    doc = _fitz.open(file_path)
+                    print(f"📊 Số trang: {len(doc)}")
+                    for i, page in enumerate(doc):
+                        extracted = page.get_text()
+                        if extracted:
+                            text += extracted + "\n"
+                            if i < 5:
+                                print(f"  ✅ Trang {i+1}: {len(extracted)} ký tự")
+                        else:
+                            print(f"  ⚠️  Trang {i+1}: Không extract được text")
+                    doc.close()
+                except Exception as e:
+                    print(f"⚠️  PyMuPDF lỗi, fallback sang pdfplumber: {e}")
+                    text = ""  # Reset để fallback xử lý lại
+            
+            # Fallback: pdfplumber (chính xác hơn cho bảng biểu)
+            if not text.strip():
+                print(f"📕 Processing PDF với pdfplumber (accurate mode)...")
+                with pdfplumber.open(file_path) as pdf:
+                    print(f"📊 Số trang: {len(pdf.pages)}")
+                    for i, page in enumerate(pdf.pages):
+                        extracted = page.extract_text()
+                        if extracted:
+                            text += extracted + "\n"
+                            if i < 5:
+                                print(f"  ✅ Trang {i+1}: {len(extracted)} ký tự")
+                        else:
+                            print(f"  ⚠️  Trang {i+1}: Không extract được text")
                         
         elif file_extension == "docx":
             print(f"📘 Processing DOCX...")
@@ -642,9 +754,8 @@ def ask_gemma(
             "Vui lòng tải tài liệu lên trước."
         ])
 
-    # GIẢM TẢI CHO CPU: Chỉ lấy 2 đoạn văn bản liên quan nhất (thay vì 3) để Prompt ngắn lại
-    retriever = vector_store.as_retriever(search_kwargs={'k' : 2})
-    relevant_doc = retriever.invoke(question)
+    # Re-ranking: Lấy 10 docs sơ bộ, chọn top-2 theo similarity score
+    relevant_doc = _rerank_documents(vector_store, question, k_initial=10, k_final=2)
 
     context  = "\n\n".join([doc.page_content for doc in relevant_doc])
 
@@ -731,7 +842,12 @@ Trả lời:"""
     )
 
     if _is_small_cpu_model(llm_model_name):
-        return _ollama_chat_stream(formatted_prompt, llm_model_name)
+        fallback_model = _get_llm_fallback_model(llm_model_name)
+        return _stream_small_model_with_fallback(
+            formatted_prompt,
+            llm_model_name,
+            fallback_model,
+        )
 
     llm = get_llm_model(llm_model_name)
     chain = prompt | llm
@@ -860,13 +976,60 @@ Tóm tắt (tiếng Việt, ngắn gọn):
         return ""
 
 
+def _safe_parse_json(text, fallback=None):
+    """
+    Parse JSON an toàn từ LLM output.
+    Tự động loại bỏ markdown code blocks và sửa lỗi JSON nhỏ.
+    """
+    if not text or not text.strip():
+        return fallback
+    
+    text = text.strip()
+    
+    # Loại bỏ markdown code blocks bằng regex
+    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if json_match:
+        text = json_match.group(1).strip()
+    
+    # Thử parse trực tiếp
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    
+    # Thử sửa lỗi JSON bằng json_repair
+    if _HAS_JSON_REPAIR:
+        try:
+            result = _json_repair.loads(text)
+            if isinstance(result, dict):
+                return result
+        except Exception:
+            pass
+    
+    # Fallback: Cố gắng tìm JSON object trong text
+    json_obj_match = re.search(r'\{[\s\S]*\}', text)
+    if json_obj_match:
+        try:
+            return json.loads(json_obj_match.group(0))
+        except json.JSONDecodeError:
+            if _HAS_JSON_REPAIR:
+                try:
+                    return _json_repair.loads(json_obj_match.group(0))
+                except Exception:
+                    pass
+    
+    return fallback
+
+
 def extract_key_facts_from_conversation(messages, llm_model_name="gemma4:e2b"):
     """
     Trích xuất các sự kiện quan trọng từ hội thoại
     Memory-Augmented RAG: Entity Memory
     """
+    _default_facts = {"entities": [], "facts": [], "numbers": []}
+    
     if not messages:
-        return {}
+        return _default_facts
     
     conversation_text = "\n".join([
         f"{msg.role}: {msg.content}" for msg in messages
@@ -892,25 +1055,18 @@ JSON:
     
     try:
         if _is_small_cpu_model(llm_model_name):
-            return {"entities": [], "facts": [], "numbers": []}
+            return dict(_default_facts)
         else:
             llm = get_llm_model(llm_model_name)
             chain = prompt | llm
             result_text = chain.invoke({"conversation": conversation_text})
         
-        # Parse JSON
-        result_text = result_text.strip()
-        # Remove markdown code blocks nếu có
-        if result_text.startswith("```"):
-            result_text = result_text.split("```")[1]
-            if result_text.startswith("json"):
-                result_text = result_text[4:]
-        
-        facts_dict = json.loads(result_text.strip())
+        # Parse JSON an toàn với _safe_parse_json
+        facts_dict = _safe_parse_json(result_text, fallback=_default_facts)
         return facts_dict
     except Exception as e:
         print(f"Lỗi khi trích xuất sự kiện: {e}")
-        return {"entities": [], "facts": [], "numbers": []}
+        return dict(_default_facts)
 
 
 def update_conversation_memory(session_id, force_update=False):
@@ -962,275 +1118,23 @@ def update_conversation_memory(session_id, force_update=False):
     return memory
 
 
-def retrieve_with_memory_augmentation(
-    question,
-    session_id,
-    vector_store,
-    k_chunks=2,
-    k_memories=1
-):
+def _rerank_documents(vector_store, question, k_initial=10, k_final=2):
     """
-    Memory-Augmented Retrieval: Kết hợp retrieval từ nhiều nguồn
-    1. Short-term: Last N messages (Conversation Buffer)
-    2. Long-term: ConversationMemory summary (Summary Memory)
-    3. Semantic: FAISS document chunks (Semantic Memory)
-    
-    Returns:
-        dict: {
-            'recent_messages': list of ChatMessage,
-            'memory_context': str (summary),
-            'key_facts': dict,
-            'document_chunks': list of Document chunks,
-            'combined_context': str (tất cả context)
-        }
+    Re-ranking bằng FAISS similarity score.
+    Lấy k_initial docs sơ bộ, chọn top k_final theo khoảng cách L2 (thấp hơn = tốt hơn).
+    Zero-cost: Không cần thêm model, sử dụng FAISS score có sẵn.
     """
-    result = {
-        'recent_messages': [],
-        'memory_context': '',
-        'key_facts': {},
-        'document_chunks': [],
-        'combined_context': ''
-    }
-
-    session_id = _normalize_session_id(session_id)
-    if session_id is None:
-        return result
-    
-    # 1. Get short-term memory (recent messages)
-    recent_messages = get_recent_conversation_history(session_id, limit=5)
-    result['recent_messages'] = recent_messages
-    
-    # 2. Get long-term memory (summary + facts)
     try:
-        conv_memory = get_or_create_conversation_memory(session_id)
-        if conv_memory is not None:
-            result['memory_context'] = conv_memory.summary
-        
-            if conv_memory.key_facts:
-                try:
-                    result['key_facts'] = json.loads(conv_memory.key_facts)
-                except:
-                    result['key_facts'] = {}
+        docs_with_scores = vector_store.similarity_search_with_score(question, k=k_initial)
+        # FAISS L2 distance: lower score = higher similarity
+        docs_with_scores.sort(key=lambda x: x[1])
+        reranked = [doc for doc, score in docs_with_scores[:k_final]]
+        print(f"🔄 [RE-RANK] {k_initial} docs → top {k_final} (scores: {[f'{s:.3f}' for _, s in docs_with_scores[:k_final]]})")
+        return reranked
     except Exception as e:
-        print(f"Lỗi khi lấy memory: {e}")
-    
-    # 3. Get semantic memory (FAISS retrieval)
-    if vector_store:
-        retriever = vector_store.as_retriever(search_kwargs={'k': k_chunks})
-        relevant_docs = retriever.invoke(question)
-        result['document_chunks'] = relevant_docs
-    
-    # 4. Build combined context
-    context_parts = []
-    
-    # Add memory context first (priority)
-    if result['memory_context']:
-        context_parts.append(f"=== TÓM TẮT HỘI THOẠI ===\n{result['memory_context']}")
-    
-    # Add key facts
-    if result['key_facts']:
-        facts_text = "=== SỰ KIỆN QUAN TRỌNG ===\n"
-        if result['key_facts'].get('entities'):
-            facts_text += f"Entities: {', '.join(result['key_facts']['entities'])}\n"
-        if result['key_facts'].get('facts'):
-            facts_text += f"Facts: {'; '.join(result['key_facts']['facts'])}\n"
-        if result['key_facts'].get('numbers'):
-            facts_text += f"Numbers: {', '.join(result['key_facts']['numbers'])}\n"
-        context_parts.append(facts_text)
-    
-    # Add document chunks
-    if result['document_chunks']:
-        doc_context = "\n\n".join([doc.page_content for doc in result['document_chunks']])
-        context_parts.append(f"=== THÔNG TIN TÀI LIỆU ===\n{doc_context}")
-    
-    result['combined_context'] = "\n\n".join(context_parts)
-    
-    return result
-def get_recent_conversation_history(session_id, limit=5):
-    """
-    Lấy lịch sử hội thoại gần đây (Short-term Memory)
-    Memory-Augmented RAG: Conversation Buffer Memory
-    """
-    session_id = _normalize_session_id(session_id)
-    if session_id is None:
-        return []
-
-    messages = ChatMessage.objects.filter(
-        session_id=session_id
-    ).order_by('-created_at')[:limit]
-    
-    # Đảo ngược để theo thứ tự thời gian
-    return list(reversed(messages))
-
-
-def get_or_create_conversation_memory(session_id):
-    """
-    Lấy hoặc tạo ConversationMemory (Long-term Memory)
-    Memory-Augmented RAG: Summary Memory
-    """
-    session_id = _normalize_session_id(session_id)
-    if session_id is None:
-        print(f"Lỗi khi lấy memory: session_id không hợp lệ ({session_id})")
-        return None
-
-    try:
-        memory = ConversationMemory.objects.get(session_id=session_id)
-        return memory
-    except ConversationMemory.DoesNotExist:
-        # Tạo memory mới nếu chưa tồn tại
-        try:
-            session = ChatSession.objects.get(id=session_id)
-        except ChatSession.DoesNotExist:
-            print(f"Lỗi khi tạo memory: session {session_id} không tồn tại")
-            return None
-
-        memory = ConversationMemory.objects.create(
-            session=session,
-            memory_type='summary'
-        )
-        return memory
-
-
-def compress_conversation_to_summary(messages, llm_model_name="gemma4:e2b"):
-    """
-    Nén lịch sử hội thoại thành summary bằng LLM
-    Memory-Augmented RAG: Memory Compression
-    """
-    if not messages:
-        return ""
-    
-    # Format conversation
-    conversation_text = "\n".join([
-        f"{msg.role}: {msg.content}" for msg in messages
-    ])
-    
-    prompt_template = """
-Bạn là trợ lý AI. Hãy tóm tắt hội thoại sau thành các ý chính quan trọng.
-Chỉ giữ lại: sự kiện, thông tin, con số, tên riêng, khái niệm quan trọng.
-Bỏ qua: lời chào hỏi, câu hỏi lặp, thông tin không quan trọng.
-
-Hội thoại:
-{conversation}
-
-Tóm tắt (tiếng Việt, ngắn gọn):
-"""
-    
-    prompt = PromptTemplate(
-        template=prompt_template,
-        input_variables=["conversation"]
-    )
-    
-    try:
-        if _is_small_cpu_model(llm_model_name):
-            recent_lines = []
-            for msg in list(messages)[-4:]:
-                recent_lines.append(f"{msg.role}: {msg.content}")
-            summary = _truncate_text("\n".join(recent_lines), 600)
-        else:
-            llm = get_llm_model(llm_model_name)
-            chain = prompt | llm
-            summary = chain.invoke({"conversation": conversation_text})
-        return summary.strip()
-    except Exception as e:
-        print(f"Lỗi khi nén bộ nhớ: {e}")
-        return ""
-
-
-def extract_key_facts_from_conversation(messages, llm_model_name="gemma4:e2b"):
-    """
-    Trích xuất các sự kiện quan trọng từ hội thoại
-    Memory-Augmented RAG: Entity Memory
-    """
-    if not messages:
-        return {}
-    
-    conversation_text = "\n".join([
-        f"{msg.role}: {msg.content}" for msg in messages
-    ])
-    
-    prompt_template = """
-Trích xuất thông tin quan trọng từ hội thoại sau.
-Trả về JSON với các key:
-
-Hội thoại:
-{conversation}
-
-JSON:
-"""
-    
-    prompt = PromptTemplate(
-        template=prompt_template,
-        input_variables=["conversation"]
-    )
-    
-    try:
-        if _is_small_cpu_model(llm_model_name):
-            return {"entities": [], "facts": [], "numbers": []}
-        else:
-            llm = get_llm_model(llm_model_name)
-            chain = prompt | llm
-            result_text = chain.invoke({"conversation": conversation_text})
-        
-        # Parse JSON
-        result_text = result_text.strip()
-        # Remove markdown code blocks nếu có
-        if result_text.startswith("```"):
-            result_text = result_text.split("```")[1]
-            if result_text.startswith("json"):
-                result_text = result_text[4:]
-        
-        facts_dict = json.loads(result_text.strip())
-        return facts_dict
-    except Exception as e:
-        print(f"Lỗi khi trích xuất sự kiện: {e}")
-        return {"entities": [], "facts": [], "numbers": []}
-
-
-def update_conversation_memory(session_id, force_update=False):
-    """
-    Cập nhật ConversationMemory từ lịch sử hội thoại
-    Memory-Augmented RAG: Memory Update Strategy
-    """
-    session_id = _normalize_session_id(session_id)
-    if session_id is None:
-        print(f"Lỗi khi update memory: session_id không hợp lệ ({session_id})")
-        return None
-
-    # Lấy toàn bộ messages
-    messages = ChatMessage.objects.filter(
-        session_id=session_id
-    ).order_by('created_at')
-    
-    if messages.count() == 0:
-        return None
-    
-    # Chỉ update nếu có >= 3 messages hoặc force_update
-    if messages.count() < 3 and not force_update:
-        return get_or_create_conversation_memory(session_id)
-    
-    # Lấy memory hiện tại
-    memory = get_or_create_conversation_memory(session_id)
-    if memory is None:
-        return None
-    
-    # Nén conversation thành summary
-    summary = compress_conversation_to_summary(messages)
-    if summary:
-        memory.summary = summary
-    
-    # Trích xuất key facts
-    facts = extract_key_facts_from_conversation(messages)
-    if facts:
-        memory.key_facts = json.dumps(facts, ensure_ascii=False)
-    
-    memory.save(update_fields=['summary', 'key_facts', 'last_updated'])
-    
-    # Update cache
-    update_memory_cache(session_id, {
-        'summary': memory.summary,
-    })
-
-    return memory
+        print(f"⚠️  [RE-RANK] Lỗi, fallback về retriever thường: {e}")
+        retriever = vector_store.as_retriever(search_kwargs={'k': k_final})
+        return retriever.invoke(question)
 
 
 def retrieve_with_memory_augmentation(
@@ -1285,10 +1189,9 @@ def retrieve_with_memory_augmentation(
     except Exception as e:
         print(f"Lỗi khi lấy memory: {e}")
     
-    # 3. Get semantic memory (FAISS retrieval)
+    # 3. Get semantic memory (FAISS retrieval with re-ranking)
     if vector_store:
-        retriever = vector_store.as_retriever(search_kwargs={'k': k_chunks})
-        relevant_docs = retriever.invoke(question)
+        relevant_docs = _rerank_documents(vector_store, question, k_initial=10, k_final=k_chunks)
         result['document_chunks'] = relevant_docs
     
     # 4. Build combined context
@@ -1318,6 +1221,10 @@ def retrieve_with_memory_augmentation(
     
     return result
 
+
+# ============================================================================
+# MEMORY-AUGMENTED RAG: Main entry point
+# ============================================================================
 
 def ask_gemma_with_memory(
     question,
@@ -1455,13 +1362,35 @@ Trả lời (tiếng Việt):"""
         template=prompt_template,
         input_variables=["chat_history", "context", "question"]
     )
-    
+
+    safe_chat_history = _truncate_text(
+        chat_history,
+        700 if _is_small_cpu_model(llm_model_name) else 1800,
+    )
+    safe_context = _truncate_text(
+        context,
+        900 if _is_small_cpu_model(llm_model_name) else 3500,
+    )
+
+    if _is_small_cpu_model(llm_model_name):
+        formatted_prompt = prompt.format(
+            chat_history=safe_chat_history,
+            context=safe_context,
+            question=question,
+        )
+        fallback_model = _get_llm_fallback_model(llm_model_name)
+        return _stream_small_model_with_fallback(
+            formatted_prompt,
+            llm_model_name,
+            fallback_model,
+        )
+
     print('Gemma 4 đang suy nghĩ (với memory context)...')
     llm = get_llm_model(llm_model_name)
     chain = prompt | llm
     
     return chain.stream({
-        "chat_history": _truncate_text(chat_history, 700 if _is_small_cpu_model(llm_model_name) else 1800),
-        "context": context,
+        "chat_history": safe_chat_history,
+        "context": safe_context,
         "question": question
     })
