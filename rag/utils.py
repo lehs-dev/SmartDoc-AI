@@ -189,33 +189,39 @@ def _build_ollama_options(model_name):
     }
 
 
-def _extract_ollama_content(response_item):
+def _extract_ollama_content(response_item, strip_text=True):
+    def _normalize(value):
+        if value is None:
+            return ''
+        text = str(value)
+        return text.strip() if strip_text else text
+
     if isinstance(response_item, dict):
         message = response_item.get('message') or {}
         if isinstance(message, dict):
-            content = (message.get('content') or '').strip()
-            if content:
+            content = _normalize(message.get('content'))
+            if content != '':
                 return content
         else:
-            content = (getattr(message, 'content', '') or '').strip()
-            if content:
+            content = _normalize(getattr(message, 'content', None))
+            if content != '':
                 return content
         response_text = response_item.get('response') or response_item.get('content')
-        return (str(response_text).strip() if response_text else '')
+        return _normalize(response_text)
 
     message = getattr(response_item, 'message', None)
     if isinstance(message, dict):
-        content = (message.get('content') or '').strip()
-        if content:
+        content = _normalize(message.get('content'))
+        if content != '':
             return content
 
     if message is not None:
-        content = (getattr(message, 'content', '') or '').strip()
-        if content:
+        content = _normalize(getattr(message, 'content', None))
+        if content != '':
             return content
 
     response_text = getattr(response_item, 'response', None) or getattr(response_item, 'content', None)
-    return (str(response_text).strip() if response_text else '')
+    return _normalize(response_text)
 
 
 def _ollama_chat_stream(prompt, model_name):
@@ -228,18 +234,24 @@ def _ollama_chat_stream(prompt, model_name):
     )
 
     for chunk in response:
-        content = _extract_ollama_content(chunk)
-        if content:
+        content = _extract_ollama_content(chunk, strip_text=False)
+        if content != '':
             yield content
 
 
-def _extract_ollama_response_text(response_item):
+def _extract_ollama_response_text(response_item, strip_text=True):
+    def _normalize(value):
+        if value is None:
+            return ''
+        text = str(value)
+        return text.strip() if strip_text else text
+
     if isinstance(response_item, dict):
         response_text = response_item.get('response') or response_item.get('content')
-        return (str(response_text).strip() if response_text else '')
+        return _normalize(response_text)
 
     response_text = getattr(response_item, 'response', None) or getattr(response_item, 'content', None)
-    return (str(response_text).strip() if response_text else '')
+    return _normalize(response_text)
 
 
 def _ollama_generate_stream(prompt, model_name):
@@ -252,8 +264,8 @@ def _ollama_generate_stream(prompt, model_name):
     )
 
     for chunk in response:
-        content = _extract_ollama_response_text(chunk)
-        if content:
+        content = _extract_ollama_response_text(chunk, strip_text=False)
+        if content != '':
             yield content
 
 
