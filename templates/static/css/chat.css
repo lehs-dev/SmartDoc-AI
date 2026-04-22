@@ -381,6 +381,67 @@ body {
     padding-right: 0;
 }
 
+.msg-bubble p {
+    margin: 0 0 0.65rem;
+}
+
+.msg-bubble p:last-child {
+    margin-bottom: 0;
+}
+
+.msg-bubble ul,
+.msg-bubble ol {
+    margin: 0.4rem 0 0.6rem;
+    padding-left: 1.25rem;
+}
+
+.msg-bubble li {
+    margin: 0.2rem 0;
+}
+
+.msg-bubble table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.6rem 0;
+    font-size: 0.85rem;
+}
+
+.msg-bubble th,
+.msg-bubble td {
+    border: 1px solid var(--border);
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+}
+
+.msg-bubble thead {
+    background: var(--surface-hover);
+}
+
+.msg-bubble code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    background: var(--surface-hover);
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+}
+
+.msg-bubble pre {
+    background: var(--surface-hover);
+    padding: 0.6rem;
+    border-radius: 8px;
+    overflow-x: auto;
+}
+
+.msg-bubble pre code {
+    background: transparent;
+    padding: 0;
+}
+
+.msg-bubble hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 0.75rem 0;
+}
+
 /* Typing indicator */
 .typing-dots {
     display: flex;

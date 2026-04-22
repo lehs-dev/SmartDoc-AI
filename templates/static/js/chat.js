@@ -30,6 +30,9 @@ document.addEventListener('DOMContentLoaded', function () {
     let currentSessionId = chatArea?.dataset.sessionId || '';
     let currentDocumentId = chatArea?.dataset.documentId || '';
     const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+    const markdownRenderer = window.markdownit
+        ? window.markdownit({ html: false, linkify: true, breaks: true })
+        : null;
 
     if (documentSelect && documentSelect.value) {
         currentDocumentId = documentSelect.value;
@@ -75,6 +78,21 @@ document.addEventListener('DOMContentLoaded', function () {
             toast.classList.remove('is-visible');
             setTimeout(() => toast.remove(), 180);
         }, 3200);
+    }
+
+    function renderMarkdown(text) {
+        const source = text || '';
+        if (markdownRenderer) {
+            return markdownRenderer.render(source);
+        }
+        return escapeHtml(source).replace(/\n/g, '<br>');
+    }
+
+    function renderExistingMessages() {
+        document.querySelectorAll('.msg-bubble[data-role="ai"]').forEach(bubble => {
+            const raw = bubble.textContent || '';
+            bubble.innerHTML = renderMarkdown(raw);
+        });
     }
 
     function updateSelectedFilename() {
@@ -253,7 +271,7 @@ document.addEventListener('DOMContentLoaded', function () {
         userMsg.className = 'msg msg-user';
         userMsg.innerHTML = `
             <div class="msg-body">
-                <div class="msg-bubble">${escapeHtml(message)}</div>
+                <div class="msg-bubble" data-role="user">${escapeHtml(message)}</div>
             </div>`;
         messagesInner.appendChild(userMsg);
         scrollToBottom();
@@ -351,12 +369,12 @@ document.addEventListener('DOMContentLoaded', function () {
                     aiEl.innerHTML = `
                         <div class="msg-avatar ai-avatar">AI</div>
                         <div class="msg-body">
-                            <div class="msg-bubble"></div>
+                            <div class="msg-bubble" data-role="ai"></div>
                         </div>`;
                     messagesInner.appendChild(aiEl);
                 }
 
-                aiEl.querySelector('.msg-bubble').textContent = aiContent;
+                aiEl.querySelector('.msg-bubble').innerHTML = renderMarkdown(aiContent);
                 scrollToBottom();
             }
 
@@ -459,6 +477,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     /* ── Init ───────────────────────────────────── */
+    renderExistingMessages();
     chatInput.focus();
     scrollToBottom();
 });

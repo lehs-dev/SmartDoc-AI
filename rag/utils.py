@@ -233,6 +233,30 @@ def _ollama_chat_stream(prompt, model_name):
             yield content
 
 
+def _extract_ollama_response_text(response_item):
+    if isinstance(response_item, dict):
+        response_text = response_item.get('response') or response_item.get('content')
+        return (str(response_text).strip() if response_text else '')
+
+    response_text = getattr(response_item, 'response', None) or getattr(response_item, 'content', None)
+    return (str(response_text).strip() if response_text else '')
+
+
+def _ollama_generate_stream(prompt, model_name):
+    response = ollama.generate(
+        model=model_name,
+        prompt=prompt,
+        options=_build_ollama_options(model_name),
+        keep_alive='15m',
+        stream=True,
+    )
+
+    for chunk in response:
+        content = _extract_ollama_response_text(chunk)
+        if content:
+            yield content
+
+
 def _stream_text_chunks(text, chunk_size=120):
     text = text or ''
     for i in range(0, len(text), chunk_size):
@@ -259,7 +283,7 @@ def _stream_with_fallback(primary_stream, fallback_stream_factory=None, fallback
 def _stream_small_model_with_fallback(prompt, model_name, fallback_model=None):
     def _fallback_stream():
         print("⚠️  [LLM] Stream trống, thử gọi non-stream...")
-        response_text = _ollama_chat_invoke(prompt, model_name)
+        response_text = _ollama_generate_invoke(prompt, model_name)
         if response_text:
             for chunk in _stream_text_chunks(response_text):
                 yield chunk
@@ -271,7 +295,7 @@ def _stream_small_model_with_fallback(prompt, model_name, fallback_model=None):
                     yield chunk
 
     return _stream_with_fallback(
-        _ollama_chat_stream(prompt, model_name),
+        _ollama_generate_stream(prompt, model_name),
         _fallback_stream,
     )
 
@@ -289,7 +313,23 @@ def _ollama_chat_invoke(prompt, model_name):
     if content:
         return content
 
-    return str(response).strip()
+    return ''
+
+
+def _ollama_generate_invoke(prompt, model_name):
+    response = ollama.generate(
+        model=model_name,
+        prompt=prompt,
+        options=_build_ollama_options(model_name),
+        keep_alive='15m',
+        stream=False,
+    )
+
+    content = _extract_ollama_response_text(response)
+    if content:
+        return content
+
+    return ''
 
 
 def get_installed_ollama_models(refresh=False):
@@ -807,6 +847,7 @@ def ask_llm_direct(
     
     if _is_small_cpu_model(llm_model_name):
         prompt_template = """Trả lời ngắn gọn bằng tiếng Việt, chỉ trả lời đáp án cuối cùng.
+    Viết có dấu và có khoảng trắng giữa các từ.
 Lịch sử ngắn:
 {chat_history}
 
@@ -1355,6 +1396,8 @@ Câu hỏi: {question}
 
 Hãy trả lời dựa trên thông tin trên, kết hợp với ngữ cảnh từ lịch sử chat.
 Nếu thông tin không có trong tài liệu, hãy nói rõ và đưa ra câu trả lời chung.
+
+Yêu cầu định dạng: viết có dấu, có khoảng trắng giữa các từ; dùng Markdown khi phù hợp.
 
 Trả lời (tiếng Việt):"""
 
