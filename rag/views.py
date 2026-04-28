@@ -9,6 +9,7 @@ from .utils import (
     get_available_llm_models,
     resolve_llm_model,
     update_conversation_memory,
+    DEFAULT_LLM_MODEL,
 )
 import json
 from django.http import JsonResponse, StreamingHttpResponse
@@ -103,7 +104,7 @@ def index(request):
                     'current_session_id': current_session_id,
                     'current_messages': current_messages,
                     'current_document_id': '',
-                    'default_llm_model': llm_models[0] if llm_models else 'gemma4:e2b',
+                    'default_llm_model': llm_models[0] if llm_models else DEFAULT_LLM_MODEL,
                 })
             
             lower_name = uploaded_file.name.lower()
@@ -209,8 +210,8 @@ def chat_api(request):
                 title = user_question[:30] + "..." if len(user_question) > 30 else user_question
                 # Tạo session mới với mode='general' mặc định
                 session = ChatSession.objects.create(
-                    title=title, 
-                    llm_model='gemma4:e2b',
+                    title=title,
+                    llm_model=DEFAULT_LLM_MODEL,
                     mode='general'  # Mặc định là general chat
                 )
 
@@ -221,7 +222,7 @@ def chat_api(request):
             
             if selected_doc and selected_doc.is_embedded:
                 # Có document → RAG mode
-                llm_model_name = resolve_llm_model('gemma4:e2b')
+                llm_model_name = resolve_llm_model(DEFAULT_LLM_MODEL)
                 session.document = selected_doc
                 session.llm_model = llm_model_name
                 session.embedding_model = selected_doc.embedding_model
@@ -233,7 +234,7 @@ def chat_api(request):
                 print(f"✅ [CHAT] RAG Mode - Document: {selected_doc.filename}")
             else:
                 # Không có document → General Chat mode
-                llm_model_name = resolve_llm_model('gemma4:e2b')
+                llm_model_name = resolve_llm_model(DEFAULT_LLM_MODEL)
                 session.document = None
                 session.embedding_model = ''
                 session.vector_db_key = ''
