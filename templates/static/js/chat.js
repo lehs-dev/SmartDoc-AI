@@ -33,6 +33,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const markdownRenderer = window.markdownit
         ? window.markdownit({ html: false, linkify: true, breaks: true })
         : null;
+    const REQUEST_TIMEOUT_MS = 90000;
+    const STREAM_IDLE_TIMEOUT_MS = 18000;
 
     if (documentSelect && documentSelect.value) {
         currentDocumentId = documentSelect.value;
@@ -254,6 +256,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!message) return;
 
         let responseStarted = false;
+        const abortController = new AbortController();
+        let streamTimer = null;
+
+        function startTimer(timeoutMs) {
+            clearTimeout(streamTimer);
+            streamTimer = setTimeout(() => {
+                abortController.abort();
+            }, timeoutMs);
+        }
 
         // Clear + reset height
         chatInput.value = '';
@@ -292,12 +303,14 @@ document.addEventListener('DOMContentLoaded', function () {
         scrollToBottom();
 
         try {
+            startTimer(REQUEST_TIMEOUT_MS);
             const response = await fetch('/chat/', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': csrfToken
                 },
+                signal: abortController.signal,
                 body: JSON.stringify({
                     message,
                     session_id: currentSessionId || null,
@@ -352,9 +365,13 @@ document.addEventListener('DOMContentLoaded', function () {
             let aiEl = null;
             let aiContent = '';
 
+            startTimer(STREAM_IDLE_TIMEOUT_MS);
+
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
+
+                startTimer(STREAM_IDLE_TIMEOUT_MS);
 
                 if (!responseStarted) {
                     responseStarted = true;
@@ -384,7 +401,14 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (err) {
             typingEl.remove();
             setChatStatus('');
-            showToast('Lỗi: ' + err.message, 'danger');
+
+            if (err && err.name === 'AbortError') {
+                showToast('Phản hồi bị gián đoạn do model phản hồi quá lâu. Hãy thử lại câu ngắn hơn.', 'warning');
+            } else {
+                showToast('Lỗi: ' + err.message, 'danger');
+            }
+        } finally {
+            clearTimeout(streamTimer);
         }
     }
 

@@ -1,5 +1,8 @@
 import os
 import re
+import queue
+import time
+import threading
 import pdfplumber
 import docx
 import ollama
@@ -10,7 +13,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaLLM, OllamaEmbeddings
 from langchain_core.prompts import PromptTemplate
-from .models import ChatMessage, ChatSession, ConversationMemory, MemoryIndex
+from .models import ChatMessage, ChatSession, ConversationMemory
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 
@@ -35,37 +38,17 @@ except ImportError:
 
 VECTOR_DB_BASE_PATH = "vector_store"
 
-SUPPORTED_LLM_MODELS = [
-    "gemma4:e2b",
-    "gemma4:e4b",
-    "qwen3.5:2b",
-    "qwen3.5:4b",
-    "qwen3.5:9b",
-]
+DEFAULT_LLM_MODEL = "gemma4:e4b"
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+DEFAULT_VECTOR_DB_KEY = "nomic_v1_db"
 
-SUPPORTED_EMBEDDING_MODELS = [
-    "nomic-embed-text",      
-    "bge-m3:567m",           
-    "nomic-embed-text-v2-moe",
-    "qwen3-embedding:0.6b",
-]
+SUPPORTED_LLM_MODELS = [DEFAULT_LLM_MODEL]
+SUPPORTED_EMBEDDING_MODELS = [DEFAULT_EMBEDDING_MODEL]
 
 VECTOR_DB_CONFIG = {
-    "qwen_db": {
-        "path": os.path.join(VECTOR_DB_BASE_PATH, "qwen_db"),
-        "embedding_model": "qwen3-embedding:0.6b",
-    },
-    "bge_db": {
-        "path": os.path.join(VECTOR_DB_BASE_PATH, "bge_db"),
-        "embedding_model": "bge-m3:567m",
-    },
-    "nomic_v2_db": {
-        "path": os.path.join(VECTOR_DB_BASE_PATH, "nomic_v2_db"),
-        "embedding_model": "nomic-embed-text-v2-moe",
-    },
-    "nomic_v1_db": {
-        "path": os.path.join(VECTOR_DB_BASE_PATH, "nomic_v1_db"),
-        "embedding_model": "nomic-embed-text",
+    DEFAULT_VECTOR_DB_KEY: {
+        "path": os.path.join(VECTOR_DB_BASE_PATH, DEFAULT_VECTOR_DB_KEY),
+        "embedding_model": DEFAULT_EMBEDDING_MODEL,
     },
 }
 
@@ -115,7 +98,16 @@ def _normalize_session_id(session_id):
 
 def _is_small_cpu_model(model_name):
     model_name = (model_name or '').lower()
-    return 'e2b' in model_name or '0.8b' in model_name
+    return 'e2b' in model_name or 'e4b' in model_name or '0.8b' in model_name
+
+
+def _is_simple_question(question, max_words=18, max_chars=120):
+    question = (question or '').strip()
+    if not question:
+        return False
+    if '\n' in question:
+        return False
+    return len(question) <= max_chars and len(question.split()) <= max_words
 
 
 def _truncate_text(text, max_chars):
@@ -139,57 +131,69 @@ def _format_recent_messages(messages, max_chars=1200):
     return "\n".join(lines)
 
 
+def _build_small_general_prompt(question, chat_history=''):
+    prompt_parts = [
+        "Bạn là trợ lý AI tiếng Việt.",
+        "Trả lời thật ngắn gọn.",
+    ]
+
+    if chat_history:
+        prompt_parts.append(f"Ngữ cảnh gần nhất:\n{chat_history}")
+
+    prompt_parts.append(f"Hỏi: {question}\nĐáp:")
+    return "\n\n".join(prompt_parts)
+
+
+def _build_small_rag_prompt(question, context, chat_history=''):
+    prompt_parts = [
+        "Bạn là SmartDoc AI.",
+        "Ưu tiên ngữ cảnh; thiếu thì trả lời ngắn gọn.",
+    ]
+
+    if context:
+        prompt_parts.append(f"Ngữ cảnh:\n{context}")
+
+    if chat_history:
+        prompt_parts.append(f"Lịch sử:\n{chat_history}")
+
+    prompt_parts.append(f"Hỏi: {question}\nĐáp:")
+    return "\n\n".join(prompt_parts)
+
+
+def _build_ollama_options(model_name, *, streaming=False):
+    _num_thread = min(10, max(1, (os.cpu_count() or 4) - 2))
+
+    if _is_small_cpu_model(model_name):
+        _num_thread = min(6, max(2, (os.cpu_count() or 4) // 2))
+        return {
+            'temperature': 0.1,
+            'repeat_penalty': 1.05,
+            'top_k': 30,
+            'top_p': 0.8,
+            'num_ctx': 1024,
+            'num_predict': 192,
+            'num_thread': _num_thread,
+        }
+
+    return {
+        'temperature': 0.4,
+        'num_ctx': 2048,
+        'num_predict': 192 if streaming else 256,
+        'num_thread': _num_thread,
+    }
+
+
 def _build_llm_kwargs(resolved_model_name):
     model_kwargs = {
         'model': resolved_model_name,
         'callbacks': [StreamingStdOutCallbackHandler()],
         'keep_alive': '15m',
     }
-
-    _num_thread = min(10, max(1, (os.cpu_count() or 4) - 2))
-
-    if _is_small_cpu_model(resolved_model_name):
-        model_kwargs.update({
-            'temperature': 0.2,
-            'repeat_penalty': 1.1,
-            'top_k': 40,
-            'top_p': 0.9,
-            'num_ctx': 4096,
-            'num_predict': 256,
-            'num_thread': _num_thread,
-        })
-    else:
-        model_kwargs.update({
-            'temperature': 0.7,
-            'num_ctx': 4096,
-            'num_thread': _num_thread,
-        })
-
+    model_kwargs.update(_build_ollama_options(resolved_model_name))
     return model_kwargs
 
-def _build_ollama_options(model_name):
-    _num_thread = min(10, max(1, (os.cpu_count() or 4) - 2))
 
-    if _is_small_cpu_model(model_name):
-        return {
-            'temperature': 0.2,
-            'repeat_penalty': 1.1,
-            'top_k': 40,
-            'top_p': 0.9,
-            'num_ctx': 4096,
-            'num_predict': 256,
-            'num_thread': _num_thread,
-        }
-
-    return {
-        'temperature': 0.7,
-        'num_ctx': 4096,
-        'num_predict': 512,
-        'num_thread': _num_thread,
-    }
-
-
-def _extract_ollama_content(response_item, strip_text=True):
+def _extract_ollama_text(response_item, strip_text=True):
     def _normalize(value):
         if value is None:
             return ''
@@ -200,73 +204,74 @@ def _extract_ollama_content(response_item, strip_text=True):
         message = response_item.get('message') or {}
         if isinstance(message, dict):
             content = _normalize(message.get('content'))
-            if content != '':
+            if content:
                 return content
         else:
             content = _normalize(getattr(message, 'content', None))
-            if content != '':
+            if content:
                 return content
+
         response_text = response_item.get('response') or response_item.get('content')
         return _normalize(response_text)
 
     message = getattr(response_item, 'message', None)
     if isinstance(message, dict):
         content = _normalize(message.get('content'))
-        if content != '':
+        if content:
             return content
 
     if message is not None:
         content = _normalize(getattr(message, 'content', None))
-        if content != '':
+        if content:
             return content
 
     response_text = getattr(response_item, 'response', None) or getattr(response_item, 'content', None)
     return _normalize(response_text)
 
 
-def _ollama_chat_stream(prompt, model_name):
-    response = ollama.chat(
-        model=model_name,
-        messages=[{'role': 'user', 'content': prompt}],
-        options=_build_ollama_options(model_name),
-        keep_alive='15m',
-        stream=True,
-    )
+def _ollama_stream(prompt, model_name, mode='chat'):
+    if mode == 'chat':
+        response = ollama.chat(
+            model=model_name,
+            messages=[{'role': 'user', 'content': prompt}],
+            options=_build_ollama_options(model_name, streaming=True),
+            keep_alive='15m',
+            stream=True,
+        )
+    else:
+        response = ollama.generate(
+            model=model_name,
+            prompt=prompt,
+            options=_build_ollama_options(model_name, streaming=True),
+            keep_alive='15m',
+            stream=True,
+        )
 
     for chunk in response:
-        content = _extract_ollama_content(chunk, strip_text=False)
+        content = _extract_ollama_text(chunk, strip_text=False)
         if content != '':
             yield content
 
 
-def _extract_ollama_response_text(response_item, strip_text=True):
-    def _normalize(value):
-        if value is None:
-            return ''
-        text = str(value)
-        return text.strip() if strip_text else text
+def _ollama_invoke(prompt, model_name, mode='chat'):
+    if mode == 'chat':
+        response = ollama.chat(
+            model=model_name,
+            messages=[{'role': 'user', 'content': prompt}],
+            options=_build_ollama_options(model_name),
+            keep_alive='15m',
+            stream=False,
+        )
+    else:
+        response = ollama.generate(
+            model=model_name,
+            prompt=prompt,
+            options=_build_ollama_options(model_name),
+            keep_alive='15m',
+            stream=False,
+        )
 
-    if isinstance(response_item, dict):
-        response_text = response_item.get('response') or response_item.get('content')
-        return _normalize(response_text)
-
-    response_text = getattr(response_item, 'response', None) or getattr(response_item, 'content', None)
-    return _normalize(response_text)
-
-
-def _ollama_generate_stream(prompt, model_name):
-    response = ollama.generate(
-        model=model_name,
-        prompt=prompt,
-        options=_build_ollama_options(model_name),
-        keep_alive='15m',
-        stream=True,
-    )
-
-    for chunk in response:
-        content = _extract_ollama_response_text(chunk, strip_text=False)
-        if content != '':
-            yield content
+    return _extract_ollama_text(response)
 
 
 def _stream_text_chunks(text, chunk_size=120):
@@ -292,56 +297,209 @@ def _stream_with_fallback(primary_stream, fallback_stream_factory=None, fallback
                 yield chunk
 
 
-def _stream_small_model_with_fallback(prompt, model_name, fallback_model=None):
-    def _fallback_stream():
-        print("⚠️  [LLM] Stream trống, thử gọi non-stream...")
-        response_text = _ollama_generate_invoke(prompt, model_name)
-        if response_text:
-            for chunk in _stream_text_chunks(response_text):
-                yield chunk
-            return
-        if fallback_model:
-            print(f"⚠️  [LLM] Non-stream rỗng, fallback sang {fallback_model}")
-            for chunk in _ollama_chat_stream(prompt, fallback_model):
-                if chunk:
-                    yield chunk
+def _stream_with_timeouts(stream_iterator, idle_timeout_seconds=18, max_duration_seconds=90):
+    stream_queue = queue.Queue()
+    done_sentinel = object()
 
-    return _stream_with_fallback(
-        _ollama_generate_stream(prompt, model_name),
-        _fallback_stream,
+    def _produce():
+        try:
+            for chunk in stream_iterator:
+                stream_queue.put(('chunk', chunk))
+        except Exception as exc:
+            stream_queue.put(('error', exc))
+        finally:
+            stream_queue.put(('done', done_sentinel))
+
+    producer = threading.Thread(target=_produce, daemon=True)
+    producer.start()
+
+    started_at = time.monotonic()
+
+    while True:
+        elapsed = time.monotonic() - started_at
+        remaining = max_duration_seconds - elapsed
+        if remaining <= 0:
+            raise TimeoutError('Model stream vượt thời gian tối đa cho phép')
+
+        wait_timeout = min(idle_timeout_seconds, remaining)
+
+        try:
+            event, payload = stream_queue.get(timeout=wait_timeout)
+        except queue.Empty as exc:
+            raise TimeoutError('Model stream bị treo do không có token mới') from exc
+
+        if event == 'chunk':
+            yield payload
+            continue
+
+        if event == 'error':
+            raise payload
+
+        if event == 'done':
+            break
+
+
+def _invoke_with_timeout(invoke_fn, timeout_seconds=40):
+    result_queue = queue.Queue(maxsize=1)
+
+    def _run_invoke():
+        try:
+            result_queue.put(('ok', invoke_fn()))
+        except Exception as exc:
+            result_queue.put(('error', exc))
+
+    worker = threading.Thread(target=_run_invoke, daemon=True)
+    worker.start()
+
+    try:
+        status, payload = result_queue.get(timeout=timeout_seconds)
+    except queue.Empty:
+        return ''
+
+    if status == 'error':
+        raise payload
+
+    return payload or ''
+
+
+def _stream_small_model_with_fallback(prompt, model_name, fallback_model=None):
+    has_output = False
+
+    try:
+        for chunk in _stream_with_timeouts(
+            _ollama_stream(prompt, model_name, mode='generate'),
+            idle_timeout_seconds=12,
+            max_duration_seconds=60,
+        ):
+            if not chunk:
+                continue
+            has_output = True
+            yield chunk
+    except TimeoutError as exc:
+        print(f"⚠️  [LLM] Stream model nhỏ bị timeout: {exc}")
+    except Exception as exc:
+        print(f"⚠️  [LLM] Stream model nhỏ lỗi, thử fallback: {exc}")
+
+    if has_output:
+        return
+
+    print("⚠️  [LLM] Stream trống, thử gọi non-stream...")
+    try:
+        response_text = _invoke_with_timeout(
+            lambda: _ollama_invoke(prompt, model_name, mode='generate'),
+            timeout_seconds=25,
+        )
+    except Exception as exc:
+        print(f"⚠️  [LLM] Non-stream model nhỏ lỗi: {exc}")
+        response_text = ''
+
+    if response_text:
+        for chunk in _stream_text_chunks(response_text):
+            yield chunk
+        return
+
+    if fallback_model:
+        print(f"⚠️  [LLM] Non-stream rỗng, fallback sang {fallback_model}")
+        has_output = False
+        try:
+            for chunk in _stream_with_timeouts(
+                _ollama_stream(prompt, fallback_model, mode='chat'),
+                idle_timeout_seconds=14,
+                max_duration_seconds=70,
+            ):
+                if not chunk:
+                    continue
+                has_output = True
+                yield chunk
+        except TimeoutError as exc:
+            print(f"⚠️  [LLM] Fallback stream timeout: {exc}")
+        except Exception as exc:
+            print(f"⚠️  [LLM] Fallback stream lỗi: {exc}")
+
+        if has_output:
+            return
+
+    yield (
+        "Xin lỗi, hiện tại model nhỏ chưa phản hồi ổn định. "
+        "Vui lòng thử lại với câu ngắn hơn hoặc chuyển tạm sang model mạnh hơn."
     )
+
+
+def _build_general_chat_history(session_id, small_model=False, simple_question=False):
+    history_limit = 1 if small_model else 2
+    max_chars = 240 if small_model else 600
+    recent_messages = get_recent_conversation_history(session_id, limit=history_limit)
+    return _format_recent_messages(recent_messages, max_chars=max_chars)
+
+
+def _build_small_rag_context(retrieval_result, simple_question=False):
+    doc_chunks = retrieval_result.get('document_chunks') or []
+    context = "\n\n".join([doc.page_content for doc in doc_chunks])
+    return _truncate_text(context, 360)
 
 
 def _ollama_chat_invoke(prompt, model_name):
-    response = ollama.chat(
-        model=model_name,
-        messages=[{'role': 'user', 'content': prompt}],
-        options=_build_ollama_options(model_name),
-        keep_alive='15m',
-        stream=False,
-    )
-
-    content = _extract_ollama_content(response)
-    if content:
-        return content
-
-    return ''
+    return _ollama_invoke(prompt, model_name, mode='chat')
 
 
 def _ollama_generate_invoke(prompt, model_name):
-    response = ollama.generate(
-        model=model_name,
-        prompt=prompt,
-        options=_build_ollama_options(model_name),
-        keep_alive='15m',
-        stream=False,
-    )
+    return _ollama_invoke(prompt, model_name, mode='generate')
 
-    content = _extract_ollama_response_text(response)
-    if content:
-        return content
 
-    return ''
+def _ollama_chat_stream(prompt, model_name):
+    return _ollama_stream(prompt, model_name, mode='chat')
+
+
+def _ollama_generate_stream(prompt, model_name):
+    return _ollama_stream(prompt, model_name, mode='generate')
+
+
+def _extract_key_facts_quick(messages):
+    default_facts = {"entities": [], "facts": [], "numbers": []}
+    if not messages:
+        return default_facts
+
+    entity_pattern = re.compile(r'\b(?:[A-ZÀ-Ỵ][\wÀ-ỹ]+(?:\s+[A-ZÀ-Ỵ][\wÀ-ỹ]+)+)\b')
+    number_pattern = re.compile(r'\b\d+(?:[.,:/-]\d+)*\b')
+
+    entities = []
+    facts = []
+    numbers = []
+    seen_facts = set()
+
+    for msg in messages:
+        text = (msg.content or '').strip()
+        if not text:
+            continue
+
+        for entity in entity_pattern.findall(text):
+            if entity not in entities:
+                entities.append(entity)
+
+        for number in number_pattern.findall(text):
+            if number not in numbers:
+                numbers.append(number)
+
+        for sentence in re.split(r'(?<=[.!?])\s+|\n+', text):
+            sentence = sentence.strip(' -•\t')
+            if len(sentence) < 24 or len(sentence) > 180:
+                continue
+            normalized = re.sub(r'\s+', ' ', sentence)
+            if normalized in seen_facts:
+                continue
+            seen_facts.add(normalized)
+            facts.append(normalized)
+            if len(facts) >= 5:
+                break
+
+        if len(facts) >= 5:
+            break
+
+    return {
+        'entities': entities[:10],
+        'facts': facts,
+        'numbers': numbers[:10],
+    }
 
 
 def get_installed_ollama_models(refresh=False):
@@ -386,21 +544,37 @@ def _find_available_model(preferred_models):
 
 
 def _get_llm_fallback_model(primary_model):
-    fallback_candidates = ["gemma4:e4b", "qwen3.5:4b", "qwen3.5:2b"]
-    return _find_available_model([model for model in fallback_candidates if model != primary_model])
+    return None
+
+
+def _normalize_llm_model(model_name):
+    if model_name not in SUPPORTED_LLM_MODELS:
+        print(f"LLM model '{model_name}' không hỗ trợ, dùng mặc định {DEFAULT_LLM_MODEL}")
+        return DEFAULT_LLM_MODEL
+    return model_name
+
+
+def _normalize_embedding_model(model_name):
+    if model_name not in SUPPORTED_EMBEDDING_MODELS:
+        print(f"Embedding model '{model_name}' không hỗ trợ, dùng mặc định {DEFAULT_EMBEDDING_MODEL}")
+        return DEFAULT_EMBEDDING_MODEL
+    return model_name
+
+
+def _normalize_vector_db_key(vector_db_key):
+    if vector_db_key not in VECTOR_DB_CONFIG:
+        print(f"Vector DB '{vector_db_key}' không hỗ trợ, dùng mặc định {DEFAULT_VECTOR_DB_KEY}")
+        return DEFAULT_VECTOR_DB_KEY
+    return vector_db_key
 
 
 def resolve_llm_model(model_name):
+    model_name = _normalize_llm_model(model_name)
     _validate_llm_model(model_name)
 
     available = _find_available_model([model_name])
     if available:
         return available
-
-    fallback = _find_available_model(SUPPORTED_LLM_MODELS)
-    if fallback:
-        print(f"Model {model_name} không có trong Ollama local, fallback sang {fallback}")
-        return fallback
 
     raise ValueError(
         f"Model LLM '{model_name}' chưa có trong Ollama local. "
@@ -432,22 +606,14 @@ def _validate_embedding_model(model_name):
 
 
 def resolve_vector_db_path(vector_db_key):
+    vector_db_key = _normalize_vector_db_key(vector_db_key)
     config = VECTOR_DB_CONFIG.get(vector_db_key)
-    if not config:
-        raise ValueError(f"Vector DB key không hợp lệ: {vector_db_key}")
     return config["path"]
 
 
 def route_embedding_target(file_size_bytes, has_vietnamese):
     file_size_mb = file_size_bytes / (1024 * 1024)
-
-    # Quy tắc route theo yêu cầu hiện tại: tiếng Việt/file lớn ưu tiên Qwen,
-    # tiếng Việt/file nhỏ ưu tiên BGE, tiếng Anh ưu tiên họ Nomic.
-    if has_vietnamese:
-        vector_db_key = "qwen_db" if file_size_mb > 5 else "bge_db"
-    else:
-        vector_db_key = "nomic_v2_db" if file_size_mb > 5 else "nomic_v1_db"
-
+    vector_db_key = DEFAULT_VECTOR_DB_KEY
     config = VECTOR_DB_CONFIG[vector_db_key]
     return {
         "file_size_mb": round(file_size_mb, 2),
@@ -468,6 +634,7 @@ def get_embeddings_model(model_name):
     Returns:
         OllamaEmbeddings instance
     """
+    model_name = _normalize_embedding_model(model_name)
     _validate_embedding_model(model_name)
     
     if model_name not in _embedding_model_cache:
@@ -496,6 +663,8 @@ def get_llm_model(model_name):
 
 def get_cached_vector_store(vector_db_key, embedding_model_name):
     """Load FAISS theo từng kho và embedding model, chỉ 1 lần cho mỗi cặp."""
+    vector_db_key = _normalize_vector_db_key(vector_db_key)
+    embedding_model_name = _normalize_embedding_model(embedding_model_name)
     cache_key = f"{vector_db_key}::{embedding_model_name}"
     if cache_key in _vector_store_cache:
         return _vector_store_cache[cache_key]
@@ -592,23 +761,27 @@ def extract_text(file_path, file_extension):
         traceback.print_exc()
         return ""
 
+def _split_text_chunks(text, chunk_size, chunk_overlap, separators=None):
+    splitter_kwargs = {
+        'chunk_size': chunk_size,
+        'chunk_overlap': chunk_overlap,
+        'length_function': len,
+    }
+    if separators is not None:
+        splitter_kwargs['separators'] = separators
+        splitter_kwargs['is_separator_regex'] = False
+
+    text_splitter = RecursiveCharacterTextSplitter(**splitter_kwargs)
+    return text_splitter.split_text(text)
+
+
 def get_text_chunks(text):
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1111,
-        chunk_overlap=50,
-        length_function=len,
-    )
-    chunks = text_splitter.split_text(text)
-    return chunks
+    return get_text_chunks_optimized(text)
 
 
 def get_text_chunks_optimized(text, file_size_mb=0, has_vietnamese=False):
     """
-    Adaptive chunking dựa trên loại nội dung và kích thước file
-    Tối ưu cho CPU/16GB RAM:
-    - Giảm chunk size cho file lớn → giảm memory footprint
-    - Tăng chunk overlap cho tiếng Việt → cải thiện context
-    - Sử dụng separators phù hợp với ngôn ngữ
+    Chunking cố định cho tài liệu 1 trang A4, ưu tiên tốc độ trên CPU.
     
     Memory-Augmented RAG: Tối ưu chunking cho memory efficiency
     
@@ -620,69 +793,38 @@ def get_text_chunks_optimized(text, file_size_mb=0, has_vietnamese=False):
     Returns:
         list of text chunks
     """
-    # Adaptive chunk size dựa trên file size và ngôn ngữ
-    if file_size_mb > 10:
-        # File lớn → chunk nhỏ để giảm RAM
-        chunk_size = 512
-        chunk_overlap = 30
-    elif file_size_mb > 5:
-        # File trung bình
-        chunk_size = 768
-        chunk_overlap = 40
-    elif has_vietnamese:
-        # Tiếng Việt cần nhiều context hơn
-        chunk_size = 896
-        chunk_overlap = 50
-    else:
-        # Mặc định
-        chunk_size = 1024
-        chunk_overlap = 50
+    chunk_size = 600
+    chunk_overlap = 60
     
     # Separators tối ưu cho tiếng Việt và English
     separators = [
-        "\n\n",      # Paragraph breaks
-        "\n",        # Line breaks
-        "。",        # Chinese/Japanese period
-        "!",        # Exclamation
-        "?",        # Question
-        ".",        # English period
-        " ",        # Spaces
-        ""          # Character level
+        "\n\n",
+        "\n",
+        "!",
+        "?",
+        ".",
+        " ",
+        ""
     ]
     
-    text_splitter = RecursiveCharacterTextSplitter(
+    chunks = _split_text_chunks(
+        text,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        length_function=len,
         separators=separators,
-        is_separator_regex=False
     )
     
-    chunks = text_splitter.split_text(text)
-    
-    print(f"Adaptive chunking: {len(chunks)} chunks | "
-          f"size={chunk_size} | overlap={chunk_overlap} | "
-          f"file_size={file_size_mb:.2f}MB | vietnamese={has_vietnamese}")
+    print(f"Fixed chunking: {len(chunks)} chunks | size={chunk_size} | overlap={chunk_overlap}")
     
     return chunks
 
 def process_document(file_path, file_extension):
-    print(f'đang xử lý file: {file_path}...')
-    raw_text = extract_text(file_path, file_extension)
-
-    if not raw_text.strip():
-        print(f"không tim thấy nội dung trong tài liệu")
-        return []
-    
-    chunks = get_text_chunks(raw_text)
-    print(f"Đã băm tài liệu thành {len(chunks)}  đoạn nhỏ")
-    return chunks
+    return process_document_optimized(file_path, file_extension)
 
 
 def process_document_optimized(file_path, file_extension, file_size_mb=0, has_vietnamese=False):
     """
-    Optimized document processing với adaptive chunking
-    Memory-Augmented RAG: Xử lý tài liệu thông minh
+    Optimized document processing với fixed chunking cho 1 trang
     
     Args:
         file_path: Đường dẫn file
@@ -700,7 +842,7 @@ def process_document_optimized(file_path, file_extension, file_size_mb=0, has_vi
         print(f"Không tìm thấy nội dung trong tài liệu")
         return []
     
-    # Sử dụng adaptive chunking
+    # Sử dụng fixed chunking
     chunks = get_text_chunks_optimized(raw_text, file_size_mb, has_vietnamese)
     
     print(f"Đã xử lý tài liệu thành {len(chunks)} đoạn (optimized)")
@@ -727,6 +869,8 @@ def get_vector_store(chunks, embedding_model_name, vector_db_key):
     print(f"💾 Vector DB key: {vector_db_key}")
     
     try:
+        vector_db_key = _normalize_vector_db_key(vector_db_key)
+        embedding_model_name = _normalize_embedding_model(embedding_model_name)
         vector_db_path = resolve_vector_db_path(vector_db_key)
         print(f"📁 Vector DB path: {vector_db_path}")
         
@@ -785,9 +929,9 @@ def get_vector_store(chunks, embedding_model_name, vector_db_key):
 def ask_gemma(
     question,
     chat_history="",
-    llm_model_name="gemma4:e4b",
-    embedding_model_name="",
-    vector_db_key="",
+    llm_model_name=DEFAULT_LLM_MODEL,
+    embedding_model_name=DEFAULT_EMBEDDING_MODEL,
+    vector_db_key=DEFAULT_VECTOR_DB_KEY,
 ):
     print('Đang tìm kiếm thông tin cho câu hỏi...')
 
@@ -806,20 +950,20 @@ def ask_gemma(
             "Vui lòng tải tài liệu lên trước."
         ])
 
-    # Re-ranking: Lấy 10 docs sơ bộ, chọn top-2 theo similarity score
-    relevant_doc = _rerank_documents(vector_store, question, k_initial=10, k_final=2)
+    # Re-ranking: Lấy ít docs để tiết kiệm context
+    relevant_doc = _rerank_documents(vector_store, question, k_initial=4, k_final=1)
 
     context  = "\n\n".join([doc.page_content for doc in relevant_doc])
 
-    prompt_template =  """Bạn là trợ lý AI tên SmartDoc AI.
-Lịch sử chat:
+    prompt_template =  """Bạn là SmartDoc AI.
+Lịch sử:
 {chat_history}
 
-Thông tin tài liệu:
+Ngữ cảnh:
 {context}
 
-Câu hỏi: {question}
-Trả lời:"""
+Hỏi: {question}
+Đáp:"""
 
     prompt = PromptTemplate(template=prompt_template, input_variables=["chat_history" ,"context", "question"])
 
@@ -828,8 +972,8 @@ Trả lời:"""
     chain = prompt | llm
 
     return chain.stream({
-        "chat_history": chat_history, 
-        "context" : context, 
+        "chat_history": _truncate_text(chat_history, 300),
+        "context" : _truncate_text(context, 600),
         "question" : question
     })
 
@@ -841,7 +985,7 @@ Trả lời:"""
 def ask_llm_direct(
     question,
     chat_history="",
-    llm_model_name="gemma4:e4b",
+    llm_model_name=DEFAULT_LLM_MODEL,
 ):
     """
     General Chat Mode - Hỏi đáp trực tiếp với LLM không cần RAG
@@ -856,45 +1000,13 @@ def ask_llm_direct(
         Stream generator từ LLM
     """
     print('\n💬 [GENERAL CHAT] Đang trả lời không cần RAG...')
-    
-    if _is_small_cpu_model(llm_model_name):
-        prompt_template = """Trả lời ngắn gọn bằng tiếng Việt, chỉ trả lời đáp án cuối cùng.
-    Viết có dấu và có khoảng trắng giữa các từ.
-Lịch sử ngắn:
-{chat_history}
 
-Câu hỏi: {question}"""
-    else:
-        prompt_template = """Bạn là SmartDoc AI - một trợ lý AI hữu ích, thân thiện và thông minh.
+    is_small_model = _is_small_cpu_model(llm_model_name)
 
-Bạn có thể:
-- Trả lời câu hỏi kiến thức chung
-- Giải thích khái niệm, ý tưởng
-- Hỗ trợ viết code, phân tích vấn đề
-- Trò chuyện tự nhiên như người trợ lý
-
-Lịch sử chat gần đây (nếu có):
-{chat_history}
-
-Câu hỏi của người dùng:
-{question}
-
-Hãy trả lời một cách tự nhiên, hữu ích và thân thiện. Sử dụng tiếng Việt trừ khi người dùng yêu cầu ngôn ngữ khác.
-
-Trả lời:"""
-
-    prompt = PromptTemplate(
-        template=prompt_template,
-        input_variables=["chat_history", "question"]
-    )
-    
-    print(f'🤖 [GENERAL CHAT] Sử dụng model: {llm_model_name}')
-    formatted_prompt = prompt.format(
-        chat_history=_truncate_text(chat_history, 220 if _is_small_cpu_model(llm_model_name) else 2200),
-        question=question,
-    )
-
-    if _is_small_cpu_model(llm_model_name):
+    if is_small_model:
+        compact_history = _truncate_text(chat_history, 240)
+        formatted_prompt = _build_small_general_prompt(question, compact_history)
+        print(f'🤖 [GENERAL CHAT] Sử dụng model compact: {llm_model_name}')
         fallback_model = _get_llm_fallback_model(llm_model_name)
         return _stream_small_model_with_fallback(
             formatted_prompt,
@@ -902,11 +1014,26 @@ Trả lời:"""
             fallback_model,
         )
 
+    prompt_template = """Bạn là SmartDoc AI.
+Ngữ cảnh gần đây:
+{chat_history}
+
+Hỏi: {question}
+Đáp:"""
+
+    prompt = PromptTemplate(template=prompt_template, input_variables=["chat_history", "question"])
+    
+    print(f'🤖 [GENERAL CHAT] Sử dụng model: {llm_model_name}')
+    formatted_prompt = prompt.format(
+        chat_history=_truncate_text(chat_history, 600),
+        question=question,
+    )
+
     llm = get_llm_model(llm_model_name)
     chain = prompt | llm
     
     return chain.stream({
-        "chat_history": _truncate_text(chat_history, 2200),
+        "chat_history": _truncate_text(chat_history, 600),
         "question": question
     })
 
@@ -939,7 +1066,7 @@ def update_memory_cache(session_id, memory_data):
     return memory_data
 
 
-def get_recent_conversation_history(session_id, limit=5):
+def get_recent_conversation_history(session_id, limit=3):
     """
     Lấy lịch sử hội thoại gần đây (Short-term Memory)
     Memory-Augmented RAG: Conversation Buffer Memory
@@ -1080,43 +1207,9 @@ def extract_key_facts_from_conversation(messages, llm_model_name="gemma4:e2b"):
     Memory-Augmented RAG: Entity Memory
     """
     _default_facts = {"entities": [], "facts": [], "numbers": []}
-    
-    if not messages:
-        return _default_facts
-    
-    conversation_text = "\n".join([
-        f"{msg.role}: {msg.content}" for msg in messages
-    ])
-    
-    prompt_template = """
-Trích xuất thông tin quan trọng từ hội thoại sau.
-Trả về JSON với các key:
-- "entities": danh sách tên riêng, địa điểm, tổ chức
-- "facts": danh sách sự kiện, thông tin quan trọng
-- "numbers": danh sách con số, thống kê, ngày tháng
 
-Hội thoại:
-{conversation}
-
-JSON:
-"""
-    
-    prompt = PromptTemplate(
-        template=prompt_template,
-        input_variables=["conversation"]
-    )
-    
     try:
-        if _is_small_cpu_model(llm_model_name):
-            return dict(_default_facts)
-        else:
-            llm = get_llm_model(llm_model_name)
-            chain = prompt | llm
-            result_text = chain.invoke({"conversation": conversation_text})
-        
-        # Parse JSON an toàn với _safe_parse_json
-        facts_dict = _safe_parse_json(result_text, fallback=_default_facts)
-        return facts_dict
+        return _extract_key_facts_quick(messages) if messages else _default_facts
     except Exception as e:
         print(f"Lỗi khi trích xuất sự kiện: {e}")
         return dict(_default_facts)
@@ -1132,29 +1225,24 @@ def update_conversation_memory(session_id, force_update=False):
         print(f"Lỗi khi update memory: session_id không hợp lệ ({session_id})")
         return None
 
-    # Lấy toàn bộ messages
-    messages = ChatMessage.objects.filter(
+    messages = list(ChatMessage.objects.filter(
         session_id=session_id
-    ).order_by('created_at')
-    
-    if messages.count() == 0:
+    ).order_by('-created_at')[:3])
+    messages.reverse()
+
+    if not messages:
         return None
-    
-    # Chỉ update nếu có >= 3 messages hoặc force_update
-    if messages.count() < 3 and not force_update:
-        return get_or_create_conversation_memory(session_id)
     
     # Lấy memory hiện tại
     memory = get_or_create_conversation_memory(session_id)
     if memory is None:
         return None
     
-    # Nén conversation thành summary
-    summary = compress_conversation_to_summary(messages)
+    summary = _format_recent_messages(messages, max_chars=400)
     if summary:
         memory.summary = summary
     
-    # Trích xuất key facts
+    # Trích xuất key facts theo cách nhẹ, không gọi thêm LLM
     facts = extract_key_facts_from_conversation(messages)
     if facts:
         memory.key_facts = json.dumps(facts, ensure_ascii=False)
@@ -1173,20 +1261,16 @@ def update_conversation_memory(session_id, force_update=False):
 
 def _rerank_documents(vector_store, question, k_initial=10, k_final=2):
     """
-    Re-ranking bằng FAISS similarity score.
-    Lấy k_initial docs sơ bộ, chọn top k_final theo khoảng cách L2 (thấp hơn = tốt hơn).
-    Zero-cost: Không cần thêm model, sử dụng FAISS score có sẵn.
+    Retrieval nhẹ: lấy trực tiếp top-k theo similarity, không rerank hai bước.
     """
     try:
-        docs_with_scores = vector_store.similarity_search_with_score(question, k=k_initial)
-        # FAISS L2 distance: lower score = higher similarity
-        docs_with_scores.sort(key=lambda x: x[1])
-        reranked = [doc for doc, score in docs_with_scores[:k_final]]
-        print(f"🔄 [RE-RANK] {k_initial} docs → top {k_final} (scores: {[f'{s:.3f}' for _, s in docs_with_scores[:k_final]]})")
-        return reranked
+        k = max(1, min(k_initial, k_final))
+        docs = vector_store.similarity_search(question, k=k)
+        print(f"🔄 [RETRIEVE] top {k} docs")
+        return docs
     except Exception as e:
         print(f"⚠️  [RE-RANK] Lỗi, fallback về retriever thường: {e}")
-        retriever = vector_store.as_retriever(search_kwargs={'k': k_final})
+        retriever = vector_store.as_retriever(search_kwargs={'k': max(1, k_final)})
         return retriever.invoke(question)
 
 
@@ -1194,28 +1278,23 @@ def retrieve_with_memory_augmentation(
     question,
     session_id,
     vector_store,
-    k_chunks=2,
+    k_chunks=1,
     k_memories=1
 ):
     """
     Memory-Augmented Retrieval: Kết hợp retrieval từ nhiều nguồn
     1. Short-term: Last N messages (Conversation Buffer)
-    2. Long-term: ConversationMemory summary (Summary Memory)
-    3. Semantic: FAISS document chunks (Semantic Memory)
+    2. Semantic: FAISS document chunks (Semantic Memory)
     
     Returns:
         dict: {
             'recent_messages': list of ChatMessage,
-            'memory_context': str (summary),
-            'key_facts': dict,
             'document_chunks': list of Document chunks,
             'combined_context': str (tất cả context)
         }
     """
     result = {
         'recent_messages': [],
-        'memory_context': '',
-        'key_facts': {},
         'document_chunks': [],
         'combined_context': ''
     }
@@ -1225,50 +1304,21 @@ def retrieve_with_memory_augmentation(
         return result
     
     # 1. Get short-term memory (recent messages)
-    recent_messages = get_recent_conversation_history(session_id, limit=5)
+    recent_messages = get_recent_conversation_history(session_id, limit=3)
     result['recent_messages'] = recent_messages
-    
-    # 2. Get long-term memory (summary + facts)
-    try:
-        conv_memory = get_or_create_conversation_memory(session_id)
-        if conv_memory is not None:
-            result['memory_context'] = conv_memory.summary
-        
-            if conv_memory.key_facts:
-                try:
-                    result['key_facts'] = json.loads(conv_memory.key_facts)
-                except:
-                    result['key_facts'] = {}
-    except Exception as e:
-        print(f"Lỗi khi lấy memory: {e}")
-    
-    # 3. Get semantic memory (FAISS retrieval with re-ranking)
+
+    # 2. Get semantic memory (FAISS retrieval with top-k)
     if vector_store:
-        relevant_docs = _rerank_documents(vector_store, question, k_initial=10, k_final=k_chunks)
+        relevant_docs = _rerank_documents(vector_store, question, k_initial=k_chunks, k_final=k_chunks)
         result['document_chunks'] = relevant_docs
-    
-    # 4. Build combined context
+
+    # 3. Build combined context
     context_parts = []
-    
-    # Add memory context first (priority)
-    if result['memory_context']:
-        context_parts.append(f"=== TÓM TẮT HỘI THOẠI ===\n{result['memory_context']}")
-    
-    # Add key facts
-    if result['key_facts']:
-        facts_text = "=== SỰ KIỆN QUAN TRỌNG ===\n"
-        if result['key_facts'].get('entities'):
-            facts_text += f"Entities: {', '.join(result['key_facts']['entities'])}\n"
-        if result['key_facts'].get('facts'):
-            facts_text += f"Facts: {'; '.join(result['key_facts']['facts'])}\n"
-        if result['key_facts'].get('numbers'):
-            facts_text += f"Numbers: {', '.join(result['key_facts']['numbers'])}\n"
-        context_parts.append(facts_text)
     
     # Add document chunks
     if result['document_chunks']:
         doc_context = "\n\n".join([doc.page_content for doc in result['document_chunks']])
-        context_parts.append(f"=== THÔNG TIN TÀI LIỆU ===\n{doc_context}")
+        context_parts.append(doc_context)
     
     result['combined_context'] = "\n\n".join(context_parts)
     
@@ -1282,7 +1332,7 @@ def retrieve_with_memory_augmentation(
 def ask_gemma_with_memory(
     question,
     session_id,
-    llm_model_name="gemma4:e4b",
+    llm_model_name=DEFAULT_LLM_MODEL,
     embedding_model_name="",
     vector_db_key="",
     use_memory_augmentation=True,
@@ -1304,60 +1354,59 @@ def ask_gemma_with_memory(
     Returns:
         Stream generator từ LLM
     """
+    is_small_model = _is_small_cpu_model(llm_model_name)
+    simple_question = _is_simple_question(question)
+
     # Nếu không ở RAG mode, fallback về general chat
     if not is_rag_mode:
         print('\n🔹 [MODE] General Chat - Không dùng RAG')
-        # Lấy chat history từ memory
-        history_limit = 2 if _is_small_cpu_model(llm_model_name) else 5
-        recent_messages = get_recent_conversation_history(session_id, limit=history_limit)
-        chat_history = _format_recent_messages(
-            recent_messages,
-            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
+        chat_history = _build_general_chat_history(
+            session_id,
+            small_model=is_small_model,
+            simple_question=simple_question,
         )
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
             llm_model_name=llm_model_name
         )
-    
+
     print('Đang tìm kiếm thông tin cho câu hỏi (Memory-Augmented RAG)...')
-    
+
     if not embedding_model_name or not vector_db_key:
         # Fallback về general chat nếu không có embedding info
         print('⚠️  [RAG] Không có embedding info, fallback về general chat')
-        history_limit = 2 if _is_small_cpu_model(llm_model_name) else 5
-        recent_messages = get_recent_conversation_history(session_id, limit=history_limit)
-        chat_history = _format_recent_messages(
-            recent_messages,
-            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
+        chat_history = _build_general_chat_history(
+            session_id,
+            small_model=is_small_model,
+            simple_question=simple_question,
         )
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
             llm_model_name=llm_model_name
         )
-    
+
     # Load vector store
     vector_store = get_cached_vector_store(vector_db_key, embedding_model_name)
-    
+
     if vector_store is None:
         # Fallback về general chat nếu không có vector store
         print('⚠️  [RAG] Không có vector store, fallback về general chat')
-        history_limit = 2 if _is_small_cpu_model(llm_model_name) else 5
-        recent_messages = get_recent_conversation_history(session_id, limit=history_limit)
-        chat_history = _format_recent_messages(
-            recent_messages,
-            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
+        chat_history = _build_general_chat_history(
+            session_id,
+            small_model=is_small_model,
+            simple_question=simple_question,
         )
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
             llm_model_name=llm_model_name
         )
-    
+
     # Memory-Augmented Retrieval
     if use_memory_augmentation:
-        k_chunks = 1 if _is_small_cpu_model(llm_model_name) else 2
+        k_chunks = 1
         retrieval_result = retrieve_with_memory_augmentation(
             question=question,
             session_id=session_id,
@@ -1365,80 +1414,55 @@ def ask_gemma_with_memory(
             k_chunks=k_chunks,
             k_memories=1
         )
-        
-        # Format chat history từ recent messages
+
         recent_messages = retrieval_result['recent_messages']
-        chat_history = _format_recent_messages(
-            recent_messages,
-            max_chars=700 if _is_small_cpu_model(llm_model_name) else 1800,
-        )
-        
-        # Sử dụng combined context từ memory + documents
-        context = _truncate_text(
-            retrieval_result['combined_context'],
-            900 if _is_small_cpu_model(llm_model_name) else 3500,
-        )
-        
+        if is_small_model:
+            chat_history = _format_recent_messages(recent_messages, max_chars=240)
+            context = _build_small_rag_context(retrieval_result, simple_question=simple_question)
+        else:
+            chat_history = _format_recent_messages(recent_messages, max_chars=600)
+            context = _truncate_text(retrieval_result['combined_context'], 1200)
+
         # Update memory sau khi retrieve (async, không block)
         try:
             update_conversation_memory(session_id)
         except Exception as e:
             print(f"Lỗi khi update memory: {e}")
-    
+
     else:
         # Fallback: Không dùng memory (như ask_gemma cũ)
-        retriever = vector_store.as_retriever(search_kwargs={'k': 1 if _is_small_cpu_model(llm_model_name) else 2})
+        retriever = vector_store.as_retriever(search_kwargs={'k': 2})
         relevant_docs = retriever.invoke(question)
-        context = _truncate_text(
-            "\n\n".join([doc.page_content for doc in relevant_docs]),
-            900 if _is_small_cpu_model(llm_model_name) else 3500,
-        )
+        raw_context = "\n\n".join([doc.page_content for doc in relevant_docs])
+        context = _truncate_text(raw_context, 360 if is_small_model else 1200)
         chat_history = ""
-    
-    # Build prompt với memory context
-    prompt_template = """Bạn là trợ lý AI tên SmartDoc AI, sử dụng Memory-Augmented RAG.
 
-Lịch sử chat gần đây:
-{chat_history}
-
-Thông tin từ bộ nhớ và tài liệu:
-{context}
-
-Câu hỏi: {question}
-
-Hãy trả lời dựa trên thông tin trên, kết hợp với ngữ cảnh từ lịch sử chat.
-Nếu thông tin không có trong tài liệu, hãy nói rõ và đưa ra câu trả lời chung.
-
-Yêu cầu định dạng: viết có dấu, có khoảng trắng giữa các từ; dùng Markdown khi phù hợp.
-
-Trả lời (tiếng Việt):"""
-
-    prompt = PromptTemplate(
-        template=prompt_template,
-        input_variables=["chat_history", "context", "question"]
-    )
-
-    safe_chat_history = _truncate_text(
-        chat_history,
-        700 if _is_small_cpu_model(llm_model_name) else 1800,
-    )
-    safe_context = _truncate_text(
-        context,
-        900 if _is_small_cpu_model(llm_model_name) else 3500,
-    )
-
-    if _is_small_cpu_model(llm_model_name):
-        formatted_prompt = prompt.format(
-            chat_history=safe_chat_history,
-            context=safe_context,
-            question=question,
-        )
+    if is_small_model:
+        safe_chat_history = _truncate_text(chat_history, 240)
+        safe_context = _truncate_text(context, 360)
+        formatted_prompt = _build_small_rag_prompt(question, safe_context, safe_chat_history)
         fallback_model = _get_llm_fallback_model(llm_model_name)
         return _stream_small_model_with_fallback(
             formatted_prompt,
             llm_model_name,
             fallback_model,
         )
+
+    # Build prompt với memory context
+    prompt_template = """Bạn là SmartDoc AI.
+Lịch sử:
+{chat_history}
+
+Ngữ cảnh:
+{context}
+
+Hỏi: {question}
+Đáp:"""
+
+    prompt = PromptTemplate(template=prompt_template, input_variables=["chat_history", "context", "question"])
+
+    safe_chat_history = _truncate_text(chat_history, 600)
+    safe_context = _truncate_text(context, 1200)
 
     print('Gemma 4 đang suy nghĩ (với memory context)...')
     llm = get_llm_model(llm_model_name)

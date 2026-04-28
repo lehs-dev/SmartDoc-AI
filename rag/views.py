@@ -2,10 +2,8 @@ from django.shortcuts import render
 from django.contrib import messages
 from .models import Document, ChatSession, ChatMessage
 from .utils import (
-    process_document,
     process_document_optimized,
     get_vector_store,
-    ask_gemma,
     ask_gemma_with_memory,
     route_embedding_target,
     get_available_llm_models,
@@ -105,7 +103,7 @@ def index(request):
                     'current_session_id': current_session_id,
                     'current_messages': current_messages,
                     'current_document_id': '',
-                    'default_llm_model': llm_models[0] if llm_models else 'gemma4:e4b',
+                    'default_llm_model': llm_models[0] if llm_models else 'gemma4:e2b',
                 })
             
             lower_name = uploaded_file.name.lower()
@@ -223,7 +221,7 @@ def chat_api(request):
             
             if selected_doc and selected_doc.is_embedded:
                 # Có document → RAG mode
-                llm_model_name = resolve_llm_model('gemma4:e4b')
+                llm_model_name = resolve_llm_model('gemma4:e2b')
                 session.document = selected_doc
                 session.llm_model = llm_model_name
                 session.embedding_model = selected_doc.embedding_model

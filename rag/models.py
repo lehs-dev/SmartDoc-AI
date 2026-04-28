@@ -3,23 +3,13 @@ import os
 
 LLM_MODEL_CHOICES = (
     ('gemma4:e2b', 'gemma4:e2b'),
-    ('gemma4:e4b', 'gemma4:e4b'),
-    ('qwen3.5:2b', 'qwen3.5:2b'),
-    ('qwen3.5:4b', 'qwen3.5:4b'),
-    ('qwen3.5:9b', 'qwen3.5:9b'),
 )
 
 EMBEDDING_MODEL_CHOICES = (
-    ('nomic-embed-text-v2-moe', 'nomic-embed-text-v2-moe'),
-    ('qwen3-embedding:0.6b', 'qwen3-embedding:0.6b'),
     ('nomic-embed-text', 'nomic-embed-text'),
-    ('bge-m3:567m', 'bge-m3:567m'),
 )
 
 VECTOR_DB_CHOICES = (
-    ('qwen_db', 'qwen_db'),
-    ('bge_db', 'bge_db'),
-    ('nomic_v2_db', 'nomic_v2_db'),
     ('nomic_v1_db', 'nomic_v1_db'),
 )
 
