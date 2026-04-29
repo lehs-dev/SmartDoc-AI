@@ -622,10 +622,13 @@ def _get_memory_summary(session_id):
 
 def _build_general_prompt(question, chat_history="", memory_summary=""):
     if _RAW_PROMPT:
+        if memory_summary:
+            return f"Thong tin da biet: {memory_summary}\nCau hoi: {question}\nTra loi:"
         return question
 
     prompt_parts = [
         "Bạn là SmartDoc AI.",
+        "Nếu tóm tắt hoặc lịch sử có thông tin, hãy dùng để trả lời trực tiếp.",
     ]
 
     if memory_summary:
@@ -640,13 +643,17 @@ def _build_general_prompt(question, chat_history="", memory_summary=""):
 
 def _build_rag_prompt(question, context, chat_history="", memory_summary=""):
     if _RAW_PROMPT:
+        if context and memory_summary:
+            return f"{context}\n\nThong tin da biet: {memory_summary}\nCau hoi: {question}\nTra loi:"
         if context:
             return f"{context}\n\n{question}"
+        if memory_summary:
+            return f"Thong tin da biet: {memory_summary}\nCau hoi: {question}\nTra loi:"
         return question
 
     prompt_parts = [
         "Bạn là SmartDoc AI.",
-        "Ưu tiên ngữ cảnh tài liệu.",
+        "Ưu tiên ngữ cảnh tài liệu; nếu tóm tắt/lịch sử có thông tin liên quan thì dùng.",
     ]
 
     if memory_summary:
@@ -790,7 +797,10 @@ def _extract_key_facts_quick(messages):
 
 def extract_key_facts_from_conversation(messages, llm_model_name=DEFAULT_LLM_MODEL):
     try:
-        return _extract_key_facts_quick(messages) if messages else {"entities": [], "facts": [], "numbers": []}
+        if not messages:
+            return {"entities": [], "facts": [], "numbers": []}
+        user_messages = [msg for msg in messages if msg.role == "user"]
+        return _extract_key_facts_quick(user_messages or messages)
     except Exception as exc:
         _log_warning("Extract facts failed: %s", exc)
         return {"entities": [], "facts": [], "numbers": []}
@@ -814,7 +824,9 @@ def update_conversation_memory(session_id, force_update=False):
     if memory is None:
         return None
 
-    summary = _format_recent_messages(messages, max_chars=400)
+    user_messages = [msg for msg in messages if msg.role == "user"]
+    summary_source = user_messages or messages
+    summary = _format_recent_messages(summary_source, max_chars=400)
     if summary:
         memory.summary = summary
 
