@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 from datetime import datetime
+import unicodedata
 import pdfplumber
 import docx
 import ollama
@@ -55,6 +56,7 @@ _LOG_RAW = os.getenv("SMARTDOC_LOG_RAW", "0") == "1"
 _LOG_RAW_LIMIT = int(os.getenv("SMARTDOC_LOG_RAW_LIMIT", "3"))
 _FALLBACK_NUM_PREDICT = int(os.getenv("SMARTDOC_FALLBACK_NUM_PREDICT", "1024"))
 _RAW_PROMPT = os.getenv("SMARTDOC_RAW_PROMPT", "1") == "1"
+ASSISTANT_NAME = os.getenv("SMARTDOC_ASSISTANT_NAME", "Gemma 4")
 if _OLLAMA_MODE not in ("chat", "generate"):
     _OLLAMA_MODE = "generate"
 
@@ -218,7 +220,7 @@ def get_user_profile_summary(user_key):
     if not user_data:
         return ""
 
-    parts = []
+    parts = ["Nguoi dung"]
     name = user_data.get("name")
     age = user_data.get("age")
     prefs = user_data.get("preferences") or []
@@ -265,6 +267,35 @@ def _truncate_text(text, max_chars):
     if len(text) <= max_chars:
         return text
     return text[:max_chars].rstrip() + "..."
+
+
+def _strip_accents(text):
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFD", text)
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+
+
+def _normalize_text(text):
+    text = _strip_accents(text or "")
+    text = text.lower()
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _is_ai_identity_question(text):
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    patterns = [
+        "ban ten gi",
+        "ten ban la gi",
+        "ban la ai",
+        "ban ten la gi",
+        "gioi thieu ban",
+        "gioi thieu ban than",
+    ]
+    return any(pattern in normalized for pattern in patterns)
 
 
 def _normalize_session_id(session_id):
@@ -769,51 +800,95 @@ def _get_memory_summary(session_id):
 
 
 def _build_general_prompt(question, chat_history="", memory_summary=""):
+    identity_question = _is_ai_identity_question(question)
+    safe_memory = "" if identity_question else memory_summary
+
     if _RAW_PROMPT:
-        if memory_summary:
-            return f"Thong tin da biet: {memory_summary}\nCau hoi: {question}\nTra loi:"
-        return question
+        if safe_memory:
+            return (
+                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
+                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
+                " Tra loi truc tiep, khong dua nhieu phuong an."
+                f"\nThong tin da biet: {safe_memory}"
+                f"\nUser: {question}\nAssistant:"
+            )
+        return (
+            f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
+            f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
+            " Tra loi truc tiep, khong dua nhieu phuong an."
+            f"\nUser: {question}\nAssistant:"
+        )
 
     prompt_parts = [
-        "Bạn là SmartDoc AI.",
-        "Nếu tóm tắt hoặc lịch sử có thông tin, hãy dùng để trả lời trực tiếp.",
+        f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}.",
+        "Neu tom tat hoac lich su co thong tin, hay dung de tra loi truc tiep.",
+        "Neu nguoi dung hoi ten ban, tra loi bang ten cua ban.",
+        "Tra loi truc tiep, khong dua nhieu phuong an.",
     ]
 
-    if memory_summary:
-        prompt_parts.append(f"Tóm tắt nhớ:\n{memory_summary}")
+    if safe_memory:
+        prompt_parts.append(f"Tom tat nho:\n{safe_memory}")
 
     if chat_history:
-        prompt_parts.append(f"Lịch sử:\n{chat_history}")
+        prompt_parts.append(f"Lich su:\n{chat_history}")
 
-    prompt_parts.append(f"Hỏi: {question}\nĐáp:")
+    prompt_parts.append(f"Hoi: {question}\nDap:")
     return "\n\n".join(prompt_parts)
 
 
 def _build_rag_prompt(question, context, chat_history="", memory_summary=""):
+    identity_question = _is_ai_identity_question(question)
+    safe_memory = "" if identity_question else memory_summary
+
     if _RAW_PROMPT:
-        if context and memory_summary:
-            return f"{context}\n\nThong tin da biet: {memory_summary}\nCau hoi: {question}\nTra loi:"
+        if context and safe_memory:
+            return (
+                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
+                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
+                " Tra loi truc tiep, khong dua nhieu phuong an."
+                f"\n{context}"
+                f"\nThong tin da biet: {safe_memory}"
+                f"\nUser: {question}\nAssistant:"
+            )
         if context:
-            return f"{context}\n\n{question}"
-        if memory_summary:
-            return f"Thong tin da biet: {memory_summary}\nCau hoi: {question}\nTra loi:"
-        return question
+            return (
+                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
+                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
+                " Tra loi truc tiep, khong dua nhieu phuong an."
+                f"\n{context}\nUser: {question}\nAssistant:"
+            )
+        if safe_memory:
+            return (
+                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
+                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
+                " Tra loi truc tiep, khong dua nhieu phuong an."
+                f"\nThong tin da biet: {safe_memory}"
+                f"\nUser: {question}\nAssistant:"
+            )
+        return (
+            f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
+            f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
+            " Tra loi truc tiep, khong dua nhieu phuong an."
+            f"\nUser: {question}\nAssistant:"
+        )
 
     prompt_parts = [
-        "Bạn là SmartDoc AI.",
-        "Ưu tiên ngữ cảnh tài liệu; nếu tóm tắt/lịch sử có thông tin liên quan thì dùng.",
+        f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}.",
+        "Uu tien ngu canh tai lieu; neu tom tat/lich su co thong tin lien quan thi dung.",
+        "Neu nguoi dung hoi ten ban, tra loi bang ten cua ban.",
+        "Tra loi truc tiep, khong dua nhieu phuong an.",
     ]
 
-    if memory_summary:
-        prompt_parts.append(f"Tóm tắt nhớ:\n{memory_summary}")
+    if safe_memory:
+        prompt_parts.append(f"Tom tat nho:\n{safe_memory}")
 
     if chat_history:
-        prompt_parts.append(f"Lịch sử:\n{chat_history}")
+        prompt_parts.append(f"Lich su:\n{chat_history}")
 
     if context:
-        prompt_parts.append(f"Ngữ cảnh:\n{context}")
+        prompt_parts.append(f"Ngu canh:\n{context}")
 
-    prompt_parts.append(f"Hỏi: {question}\nĐáp:")
+    prompt_parts.append(f"Hoi: {question}\nDap:")
     return "\n\n".join(prompt_parts)
 
 
@@ -848,7 +923,7 @@ def ask_gemma(
     model_name = resolve_llm_model(llm_model_name)
     context = _retrieve_context(vector_store, question, k_chunks=_MAX_RAG_CHUNKS)
     prompt = _build_rag_prompt(question, context, chat_history=chat_history)
-    fallback_prompt = f"{context}\n\n{question}" if context else question
+    fallback_prompt = prompt if _RAW_PROMPT else (f"{context}\n\n{question}" if context else question)
     return _stream_with_fallback(prompt, model_name, fallback_prompt=fallback_prompt)
 
 
@@ -864,7 +939,8 @@ def ask_llm_direct(
 ):
     model_name = resolve_llm_model(llm_model_name)
     prompt = _build_general_prompt(question, chat_history=chat_history, memory_summary=memory_summary)
-    return _stream_with_fallback(prompt, model_name, fallback_prompt=question)
+    fallback_prompt = prompt if _RAW_PROMPT else question
+    return _stream_with_fallback(prompt, model_name, fallback_prompt=fallback_prompt)
 
 
 def get_recent_conversation_history(session_id, limit=3):
@@ -1043,5 +1119,5 @@ def ask_gemma_with_memory(
     memory_summary = _merge_memory(memory_summary)
     context = _retrieve_context(vector_store, question, k_chunks=_MAX_RAG_CHUNKS)
     prompt = _build_rag_prompt(question, context, chat_history=chat_history, memory_summary=memory_summary)
-    fallback_prompt = f"{context}\n\n{question}" if context else question
+    fallback_prompt = prompt if _RAW_PROMPT else (f"{context}\n\n{question}" if context else question)
     return _stream_with_fallback(prompt, model_name, fallback_prompt=fallback_prompt)
