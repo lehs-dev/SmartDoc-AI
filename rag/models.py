@@ -2,24 +2,15 @@ from django.db import models
 import os
 
 LLM_MODEL_CHOICES = (
+    ('gemma4:e4b', 'gemma4:e4b'),
     ('gemma4:e2b', 'gemma4:e2b'),
-    ('qwen3.5:0.8b', 'qwen3.5:0.8b'),
-    ('qwen3.5:2b', 'qwen3.5:2b'),
-    ('qwen3.5:4b', 'qwen3.5:4b'),
-    ('qwen3.5:9b', 'qwen3.5:9b'),
 )
 
 EMBEDDING_MODEL_CHOICES = (
-    ('nomic-embed-text-v2-moe', 'nomic-embed-text-v2-moe'),
-    ('qwen3-embedding:0.6b', 'qwen3-embedding:0.6b'),
     ('nomic-embed-text', 'nomic-embed-text'),
-    ('bge-m3:567m', 'bge-m3:567m'),
 )
 
 VECTOR_DB_CHOICES = (
-    ('qwen_db', 'qwen_db'),
-    ('bge_db', 'bge_db'),
-    ('nomic_v2_db', 'nomic_v2_db'),
     ('nomic_v1_db', 'nomic_v1_db'),
 )
 
@@ -48,15 +39,21 @@ class Document(models.Model):
         return self.filename
     
 class ChatSession(models.Model):
+    MODE_CHOICES = (
+        ('general', 'Chat thường - Không dùng RAG'),
+        ('rag', 'RAG - Có tài liệu ngữ cảnh'),
+    )
+    
     title = models.CharField(max_length=255, default="New chat")
+    mode = models.CharField(max_length=20, choices=MODE_CHOICES, default='general')
     document = models.ForeignKey(Document, on_delete=models.SET_NULL, null=True, blank=True, related_name='chat_sessions')
-    llm_model = models.CharField(max_length=50, choices=LLM_MODEL_CHOICES, default='gemma4:e2b')
+    llm_model = models.CharField(max_length=50, choices=LLM_MODEL_CHOICES, default='gemma4:e4b')
     embedding_model = models.CharField(max_length=64, choices=EMBEDDING_MODEL_CHOICES, blank=True)
     vector_db_key = models.CharField(max_length=32, choices=VECTOR_DB_CHOICES, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.title} - {self.created_at.strftime('%d/%m/%Y %H:%M')}"
+        return f"{self.title} - {self.created_at.strftime('%d/%m/%Y %H:%M')} ({self.get_mode_display()})"
     
 class ChatMessage(models.Model):
     ROLES_CHOICES = (
@@ -71,3 +68,76 @@ class ChatMessage(models.Model):
 
     def __str__(self):
         return f"[{self.get_role_display()}] {self.content[:50]}..."
+
+
+class ConversationMemory(models.Model):
+    """
+    Long-term memory - lưu trữ thông tin quan trọng từ hội thoại
+    Memory-Augmented RAG: Lưu trữ summary, key facts, user preferences
+    """
+    MEMORY_TYPE_CHOICES = (
+        ('summary', 'Tóm tắt hội thoại'),
+        ('facts', 'Sự kiện quan trọng'),
+        ('preferences', 'Tùy chọn người dùng'),
+    )
+
+    session = models.OneToOneField(ChatSession, on_delete=models.CASCADE, related_name='memory')
+    summary = models.TextField(blank=True, help_text="Tóm tắt nội dung chính của hội thoại")
+    key_facts = models.TextField(blank=True, help_text="JSON: Các sự kiện, thông tin quan trọng")
+    user_preferences = models.TextField(blank=True, help_text="JSON: Tùy chọn, sở thích người dùng")
+    memory_type = models.CharField(max_length=20, choices=MEMORY_TYPE_CHOICES, default='summary')
+    last_updated = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Memory - {self.session.title} ({self.get_memory_type_display()})"
+    
+    class Meta:
+        verbose_name = 'Conversation Memory'
+        verbose_name_plural = 'Conversation Memories'
+
+
+class MemoryIndex(models.Model):
+    """
+    Index cho memory retrieval - quản lý các vector store của memory
+    Memory-Augmented RAG: Index cho semantic, episodic, procedural memory
+    """
+    MEMORY_INDEX_TYPE = (
+        ('semantic', 'Semantic Memory - Kiến thức chung'),
+        ('episodic', 'Episodic Memory - Hội thoại cụ thể'),
+        ('procedural', 'Procedural Memory - Quy trình, cách làm'),
+    )
+
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='memory_indices')
+    memory_type = models.CharField(max_length=20, choices=MEMORY_INDEX_TYPE, default='semantic')
+    embedding_model = models.CharField(max_length=64, choices=EMBEDDING_MODEL_CHOICES)
+    vector_db_key = models.CharField(max_length=32, choices=VECTOR_DB_CHOICES)
+    is_indexed = models.BooleanField(default=False)
+    chunk_count = models.IntegerField(default=0, help_text="Số lượng memory chunks đã index")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.document.filename} - {self.get_memory_type_display()} ({self.vector_db_key})"
+    
+    class Meta:
+        verbose_name = 'Memory Index'
+        verbose_name_plural = 'Memory Indices'
+        unique_together = ['document', 'memory_type']
+
+
+class UserProfile(models.Model):
+    session_key = models.CharField(max_length=40, unique=True)
+    name = models.CharField(max_length=60, blank=True)
+    age = models.PositiveIntegerField(null=True, blank=True)
+    preferences = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        label = self.name or 'Nguoi dung'
+        return f"{label} ({self.session_key[:8]})"
+
+    class Meta:
+        verbose_name = 'User Profile'
+        verbose_name_plural = 'User Profiles'

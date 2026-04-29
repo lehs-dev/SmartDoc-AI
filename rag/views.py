@@ -2,15 +2,65 @@ from django.shortcuts import render
 from django.contrib import messages
 from .models import Document, ChatSession, ChatMessage
 from .utils import (
-    process_document,
+    process_document_optimized,
     get_vector_store,
-    ask_gemma,
+    ask_gemma_with_memory,
     route_embedding_target,
     get_available_llm_models,
+    resolve_llm_model,
+    update_conversation_memory,
+    update_user_profile,
+    DEFAULT_LLM_MODEL,
 )
 import json
 from django.http import JsonResponse, StreamingHttpResponse
 
+
+# ============================================================================
+# UPLOAD VALIDATION: MIME type + File size limit
+# ============================================================================
+
+MAX_UPLOAD_SIZE_MB = 50
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+# Magic bytes cho kiểm tra MIME type
+_PDF_MAGIC = b'%PDF'
+_DOCX_MAGIC = b'PK'  # DOCX là ZIP format
+
+
+def _validate_upload(uploaded_file):
+    """
+    Kiểm tra tính hợp lệ của file upload:
+    - Kích thước file không vượt MAX_UPLOAD_SIZE_MB
+    - MIME type khớp với extension (chống giả mạo file)
+    
+    Returns:
+        tuple: (is_valid: bool, error_message: str)
+    """
+    # Kiểm tra kích thước file
+    if uploaded_file.size > MAX_UPLOAD_SIZE_BYTES:
+        size_mb = uploaded_file.size / (1024 * 1024)
+        return False, (
+            f'File quá lớn ({size_mb:.1f}MB). '
+            f'Giới hạn tối đa: {MAX_UPLOAD_SIZE_MB}MB'
+        )
+    
+    # Kiểm tra MIME type qua magic bytes
+    try:
+        header = uploaded_file.read(8)
+        uploaded_file.seek(0)  # Reset vị trí đọc về đầu
+    except Exception:
+        return False, 'Không thể đọc file header'
+    
+    lower_name = uploaded_file.name.lower()
+    
+    if lower_name.endswith('.pdf') and not header.startswith(_PDF_MAGIC):
+        return False, 'File PDF không hợp lệ (nội dung không phải PDF thật)'
+    
+    if lower_name.endswith('.docx') and not header.startswith(_DOCX_MAGIC):
+        return False, 'File DOCX không hợp lệ (nội dung không phải DOCX thật)'
+    
+    return True, ''
 
 def _resolve_document_for_chat(document_id, session=None):
     if document_id:
@@ -44,6 +94,20 @@ def index(request):
         has_vietnamese = request.POST.get('has_vietnamese') == 'on'
 
         if uploaded_file:
+            # Validation: MIME type + kích thước file
+            is_valid, validation_error = _validate_upload(uploaded_file)
+            if not is_valid:
+                messages.error(request, validation_error)
+                return render(request, 'rag/index.html', {
+                    'sessions': sessions,
+                    'embedded_documents': embedded_documents,
+                    'llm_models': llm_models,
+                    'current_session_id': current_session_id,
+                    'current_messages': current_messages,
+                    'current_document_id': '',
+                    'default_llm_model': llm_models[0] if llm_models else DEFAULT_LLM_MODEL,
+                })
+            
             lower_name = uploaded_file.name.lower()
             if lower_name.endswith('.pdf'):
                 file_extension = 'pdf'
@@ -65,30 +129,40 @@ def index(request):
                     vector_db_key=route_info['vector_db_key'],
                 )
 
-                # Chunking ở chỗ này
-                chunks = process_document(doc.file.path, doc.file_type)
+                # Chunking với adaptive optimization
+                chunks = process_document_optimized(
+                        doc.file.path, 
+                        doc.file_type,
+                        route_info['file_size_mb'],
+                        has_vietnamese
+                    )
 
                 if chunks:
-                    get_vector_store(chunks, doc.embedding_model, doc.vector_db_key)
-                    doc.is_embedded = True
-                    doc.save(update_fields=['is_embedded'])
+                    # Vectorize và lưu vào FAISS
+                    try:
+                        get_vector_store(chunks, doc.embedding_model, doc.vector_db_key)
+                        doc.is_embedded = True
+                        doc.save(update_fields=['is_embedded'])
 
-                    # Nếu đang trong 1 session thì tự gắn tài liệu vừa upload vào session đó.
-                    if current_session:
-                        current_session.document = doc
-                        current_session.embedding_model = doc.embedding_model
-                        current_session.vector_db_key = doc.vector_db_key
-                        current_session.save(update_fields=['document', 'embedding_model', 'vector_db_key'])
+                        # Nếu đang trong 1 session thì tự gắn tài liệu vừa upload vào session đó.
+                        if current_session:
+                            current_session.document = doc
+                            current_session.embedding_model = doc.embedding_model
+                            current_session.vector_db_key = doc.vector_db_key
+                            current_session.save(update_fields=['document', 'embedding_model', 'vector_db_key'])
 
-                    messages.success(
-                        request,
-                        (
-                            f'Tải thành công: {doc.filename}. '
-                            f'Đã chia {len(chunks)} đoạn | '
-                            f'Embedding: {doc.embedding_model} | '
-                            f'Kho vector: {doc.vector_db_key}'
+                        messages.success(
+                            request,
+                            (
+                                f'Tải thành công: {doc.filename}. '
+                                f'Đã chia {len(chunks)} đoạn | '
+                                f'Embedding: {doc.embedding_model} | '
+                                f'Kho vector: {doc.vector_db_key}'
+                            )
                         )
-                    )
+                    except Exception as e:
+                        messages.error(request, f'Lỗi khi vector hóa: {str(e)}')
+                        print(f"Vectorization error: {e}")
                 else:
                     messages.warning(request, 'Đã tải file nhưng không tìm thấy dữ liệu để nhúng')
 
@@ -123,14 +197,15 @@ def chat_api(request):
             data = json.loads(request.body or '{}')
             user_question = (data.get('message') or '').strip()
             session_id = data.get('session_id')
-            llm_model_name = (data.get('llm_model') or 'gemma4:e2b').strip()
             document_id = data.get('document_id')
-
-            if llm_model_name not in get_available_llm_models():
-                return JsonResponse({'error': f'LLM model không hợp lệ: {llm_model_name}'}, status=400)
+            force_general = bool(data.get('force_general'))
 
             if not user_question:
                 return JsonResponse({'error': 'Phải nhập câu hỏi'}, status=400)
+
+            if not request.session.session_key:
+                request.session.save()
+            user_key = request.session.session_key
 
             if session_id:
                 session = ChatSession.objects.select_related('document').filter(id=session_id).first()
@@ -138,61 +213,108 @@ def chat_api(request):
                     return JsonResponse({'error': 'Session không tồn tại'}, status=404)
             else:
                 title = user_question[:30] + "..." if len(user_question) > 30 else user_question
-                session = ChatSession.objects.create(title=title, llm_model=llm_model_name)
+                # Tạo session mới với mode='general' mặc định
+                session = ChatSession.objects.create(
+                    title=title,
+                    llm_model=DEFAULT_LLM_MODEL,
+                    mode='general'  # Mặc định là general chat
+                )
 
-            selected_doc = _resolve_document_for_chat(document_id, session=session)
-            if selected_doc is None:
-                return JsonResponse({'error': 'Chưa có tài liệu đã nhúng. Vui lòng tải tài liệu trước.'}, status=400)
+            # Kiểm tra xem có document không để xác định mode
+            selected_doc = None
+            if not force_general:
+                selected_doc = _resolve_document_for_chat(document_id, session=session)
+            
+            if selected_doc and selected_doc.is_embedded:
+                # Có document → RAG mode
+                llm_model_name = resolve_llm_model(DEFAULT_LLM_MODEL)
+                session.document = selected_doc
+                session.llm_model = llm_model_name
+                session.embedding_model = selected_doc.embedding_model
+                session.vector_db_key = selected_doc.vector_db_key
+                session.mode = 'rag'
+                session.save(update_fields=['document', 'llm_model', 'embedding_model', 'vector_db_key', 'mode'])
+                
+                is_rag_mode = True
+                print(f"✅ [CHAT] RAG Mode - Document: {selected_doc.filename}")
+            else:
+                # Không có document → General Chat mode
+                llm_model_name = resolve_llm_model(DEFAULT_LLM_MODEL)
+                session.document = None
+                session.embedding_model = ''
+                session.vector_db_key = ''
+                session.llm_model = llm_model_name
+                session.mode = 'general'
+                session.save(update_fields=['document', 'embedding_model', 'vector_db_key', 'llm_model', 'mode'])
+                
+                is_rag_mode = False
+                print(f"💬 [CHAT] General Mode - Không có document")
 
-            session.document = selected_doc
-            session.llm_model = llm_model_name
-            session.embedding_model = selected_doc.embedding_model
-            session.vector_db_key = selected_doc.vector_db_key
-            session.save(update_fields=['document', 'llm_model', 'embedding_model', 'vector_db_key'])
+            # Lưu thông tin user cơ bản nếu phát hiện trong câu hỏi
+            try:
+                update_user_profile(user_key, user_question)
+            except Exception:
+                pass
 
-            # LẤY TRÍ NHỚ: Rút 6 tin nhắn gần nhất (trước khi lưu tin mới)
-            past_messages = ChatMessage.objects.filter(session=session).order_by('-created_at')[:6]
-            # Lật ngược lại để chat cũ nằm trên, chat mới nằm dưới
-            past_messages = reversed(list(past_messages))
-
-            chat_history_text = ""
-            for msg in past_messages:
-                role_name = "Người dùng" if msg.role == 'user' else "SmartDoc AI"
-                chat_history_text += f"{role_name}: {msg.content}\n"
-
-            # Lưu câu hỏi mới của User
+            # Lưu câu hỏi mới của User trước khi gọi AI
             ChatMessage.objects.create(session=session, role='user', content=user_question)
 
-            # Truyền thêm chat_history_text vào
-            stream_response = ask_gemma(
-                user_question,
-                chat_history_text,
-                llm_model_name=llm_model_name,
-                embedding_model_name=selected_doc.embedding_model,
-                vector_db_key=selected_doc.vector_db_key,
-            )
+            # Gọi AI với mode phù hợp
+            # is_rag_mode=True: RAG với memory augmentation
+            # is_rag_mode=False: General chat với LLM trực tiếp
 
             def generate_stream():
                 full_answer = ""
+                candidate_answer = ""
                 try:
+                    stream_response = ask_gemma_with_memory(
+                        question=user_question,
+                        session_id=session.id,
+                        llm_model_name=llm_model_name,
+                        embedding_model_name=selected_doc.embedding_model if selected_doc else "",
+                        vector_db_key=selected_doc.vector_db_key if selected_doc else "",
+                        use_memory_augmentation=True,  # Luôn dùng memory
+                        is_rag_mode=is_rag_mode,  # Truyền mode vào
+                        user_key=user_key,
+                    )
+
                     for chunk in stream_response:
-                        full_answer += chunk
+                        candidate_answer += chunk
                         yield chunk
+
+                    full_answer = candidate_answer
+
+                    if not full_answer.strip():
+                        error_text = (
+                            f"Model {llm_model_name} không trả về nội dung. "
+                            "Vui lòng thử lại với câu hỏi ngắn hơn hoặc kiểm tra lại model Ollama."
+                        )
+                        full_answer = error_text
+                        yield error_text
+
                 except Exception as stream_error:
                     error_text = (
                         "Loi khi goi mo hinh LLM. "
                         f"Chi tiet: {stream_error}"
                     )
-                    full_answer += error_text
+                    full_answer = error_text
                     yield error_text
 
                 # Lưu câu trả lời của AI
                 if full_answer.strip():
                     ChatMessage.objects.create(session=session, role='ai', content=full_answer)
+                
+                # Update memory sau khi hoàn thành câu trả lời (non-blocking)
+                try:
+                    update_conversation_memory(session.id)
+                except Exception as e:
+                    print(f"Lỗi khi update memory: {e}")
 
             response = StreamingHttpResponse(generate_stream(), content_type="text/plain; charset=utf-8")
             response['X-Session-Id'] = str(session.id)
-            response['X-Document-Id'] = str(selected_doc.id)
+            response['X-Mode'] = session.mode  # Thêm header để frontend biết mode
+            if selected_doc:
+                response['X-Document-Id'] = str(selected_doc.id)
             return response
 
         except json.JSONDecodeError:

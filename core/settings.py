@@ -26,7 +26,12 @@ SECRET_KEY = 'django-insecure-&ryn=ny_z14=i06e(4s%e&gxav0(2-6-t@0d3=7h93(280t^pg
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '[::1]',
+    'testserver',
+]
 
 
 # Application definition
@@ -117,6 +122,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATICFILES_DIRS = [
+    BASE_DIR / 'templates' / 'static',
+]
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -126,3 +134,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Đường dẫn file được upload
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Giới hạn kích thước upload (50MB + overhead)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52_428_800   # ~50MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 52_428_800   # ~50MB
