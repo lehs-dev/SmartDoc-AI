@@ -9,6 +9,7 @@ from .utils import (
     get_available_llm_models,
     resolve_llm_model,
     update_conversation_memory,
+    update_user_profile,
     DEFAULT_LLM_MODEL,
 )
 import json
@@ -202,6 +203,10 @@ def chat_api(request):
             if not user_question:
                 return JsonResponse({'error': 'Phải nhập câu hỏi'}, status=400)
 
+            if not request.session.session_key:
+                request.session.save()
+            user_key = request.session.session_key
+
             if session_id:
                 session = ChatSession.objects.select_related('document').filter(id=session_id).first()
                 if session is None:
@@ -245,6 +250,12 @@ def chat_api(request):
                 is_rag_mode = False
                 print(f"💬 [CHAT] General Mode - Không có document")
 
+            # Lưu thông tin user cơ bản nếu phát hiện trong câu hỏi
+            try:
+                update_user_profile(user_key, user_question)
+            except Exception:
+                pass
+
             # Lưu câu hỏi mới của User trước khi gọi AI
             ChatMessage.objects.create(session=session, role='user', content=user_question)
 
@@ -263,7 +274,8 @@ def chat_api(request):
                         embedding_model_name=selected_doc.embedding_model if selected_doc else "",
                         vector_db_key=selected_doc.vector_db_key if selected_doc else "",
                         use_memory_augmentation=True,  # Luôn dùng memory
-                        is_rag_mode=is_rag_mode  # Truyền mode vào
+                        is_rag_mode=is_rag_mode,  # Truyền mode vào
+                        user_key=user_key,
                     )
 
                     for chunk in stream_response:

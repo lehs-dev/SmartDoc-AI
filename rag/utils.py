@@ -2,6 +2,8 @@ import os
 import re
 import json
 import logging
+import threading
+from datetime import datetime
 import pdfplumber
 import docx
 import ollama
@@ -56,6 +58,9 @@ _RAW_PROMPT = os.getenv("SMARTDOC_RAW_PROMPT", "1") == "1"
 if _OLLAMA_MODE not in ("chat", "generate"):
     _OLLAMA_MODE = "generate"
 
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+USER_INFO_PATH = os.getenv("SMARTDOC_USER_INFO_PATH", os.path.join(_PROJECT_ROOT, "user_info.json"))
+
 _LOG_LEVEL = os.getenv("SMARTDOC_LOG_LEVEL", "INFO").upper()
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -71,6 +76,7 @@ if _LOG_VERBOSE or _LOG_RAW:
 _embedding_model_cache = {}
 _vector_store_cache = {}
 _installed_ollama_models_cache = None
+_user_info_lock = threading.Lock()
 
 
 def _log_debug(message, *args):
@@ -83,6 +89,148 @@ def _log_info(message, *args):
 
 def _log_warning(message, *args):
     _logger.warning(message, *args)
+
+
+def _load_user_info_unlocked():
+    if not os.path.exists(USER_INFO_PATH):
+        return {"version": 1, "users": {}}
+
+    try:
+        with open(USER_INFO_PATH, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            return {"version": 1, "users": {}}
+        data.setdefault("version", 1)
+        data.setdefault("users", {})
+        if not isinstance(data["users"], dict):
+            data["users"] = {}
+        return data
+    except Exception as exc:
+        _log_warning("Cannot read user_info.json: %s", exc)
+        return {"version": 1, "users": {}}
+
+
+def _save_user_info_unlocked(data):
+    directory = os.path.dirname(USER_INFO_PATH)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    tmp_path = USER_INFO_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=True, indent=2)
+    os.replace(tmp_path, USER_INFO_PATH)
+
+
+def _split_preferences(raw_text):
+    if not raw_text:
+        return []
+    parts = re.split(r",|;|\bva\b|\bvà\b", raw_text, flags=re.IGNORECASE)
+    cleaned = [part.strip(" .\t\n\r").strip() for part in parts]
+    return [item for item in cleaned if item][:5]
+
+
+def _extract_user_info_from_text(text):
+    if not text:
+        return {}
+
+    info = {}
+
+    name_match = re.search(
+        r"(?:tôi|toi|mình|minh|em|ta)\s+tên\s+([A-Za-zÀ-ỹ\s]{2,60})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if name_match:
+        raw_name = name_match.group(1)
+        raw_name = re.split(r"[\n\r,.!?;:]+", raw_name)[0].strip()
+        if 1 < len(raw_name) <= 60:
+            info["name"] = raw_name
+
+    age_match = re.search(r"(\d{1,3})\s*(?:tuoi|tuổi)\b", text, flags=re.IGNORECASE)
+    if age_match:
+        age = int(age_match.group(1))
+        if 0 < age < 120:
+            info["age"] = age
+
+    pref_match = re.search(
+        r"(?:sở\s*thích|so\s*thich)(?:\s+của\s+tôi|\s+cua\s+toi)?\s*(?:là|la|:)\s*([^\n]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if pref_match:
+        raw_pref = pref_match.group(1).strip()
+        prefs = _split_preferences(raw_pref)
+        if prefs:
+            info["preferences"] = prefs
+    else:
+        like_match = re.search(
+            r"(?:tôi|toi|mình|minh|em)\s+thích\s+([^\n]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if like_match:
+            raw_like = like_match.group(1).strip()
+            prefs = _split_preferences(raw_like)
+            if prefs:
+                info["preferences"] = prefs
+
+    return info
+
+
+def update_user_profile(user_key, text):
+    if not user_key:
+        return {}
+
+    updates = _extract_user_info_from_text(text)
+    if not updates:
+        return {}
+
+    with _user_info_lock:
+        data = _load_user_info_unlocked()
+        users = data.get("users", {})
+        user_data = users.get(user_key, {})
+
+        if "name" in updates:
+            user_data["name"] = updates["name"]
+        if "age" in updates:
+            user_data["age"] = updates["age"]
+        if "preferences" in updates:
+            existing = user_data.get("preferences", [])
+            combined = existing + [item for item in updates["preferences"] if item not in existing]
+            user_data["preferences"] = combined[:8]
+
+        user_data["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        users[user_key] = user_data
+        data["users"] = users
+        _save_user_info_unlocked(data)
+
+    return user_data
+
+
+def get_user_profile_summary(user_key):
+    if not user_key:
+        return ""
+
+    with _user_info_lock:
+        data = _load_user_info_unlocked()
+        user_data = data.get("users", {}).get(user_key)
+
+    if not user_data:
+        return ""
+
+    parts = []
+    name = user_data.get("name")
+    age = user_data.get("age")
+    prefs = user_data.get("preferences") or []
+
+    if name:
+        parts.append(f"Ten: {name}")
+    if age:
+        parts.append(f"Tuoi: {age}")
+    if prefs:
+        parts.append("So thich: " + ", ".join(prefs))
+
+    return "; ".join(parts)
 
 
 def _log_request(prompt, model_name, mode, options):
@@ -846,12 +994,20 @@ def ask_gemma_with_memory(
     vector_db_key="",
     use_memory_augmentation=True,
     is_rag_mode=False,
+    user_key=None,
 ):
     model_name = resolve_llm_model(llm_model_name)
+    user_profile = get_user_profile_summary(user_key) if user_key else ""
+
+    def _merge_memory(memory_summary):
+        if user_profile:
+            return f"{user_profile}\n{memory_summary}" if memory_summary else user_profile
+        return memory_summary
 
     if not is_rag_mode:
         chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
         memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+        memory_summary = _merge_memory(memory_summary)
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
@@ -862,6 +1018,7 @@ def ask_gemma_with_memory(
     if not embedding_model_name or not vector_db_key:
         chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
         memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+        memory_summary = _merge_memory(memory_summary)
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
@@ -873,6 +1030,7 @@ def ask_gemma_with_memory(
     if vector_store is None:
         chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
         memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+        memory_summary = _merge_memory(memory_summary)
         return ask_llm_direct(
             question=question,
             chat_history=chat_history,
@@ -882,6 +1040,7 @@ def ask_gemma_with_memory(
 
     chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
     memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+    memory_summary = _merge_memory(memory_summary)
     context = _retrieve_context(vector_store, question, k_chunks=_MAX_RAG_CHUNKS)
     prompt = _build_rag_prompt(question, context, chat_history=chat_history, memory_summary=memory_summary)
     fallback_prompt = f"{context}\n\n{question}" if context else question
