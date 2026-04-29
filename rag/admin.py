@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Document, ChatSession, ChatMessage
+from .models import Document, ChatSession, ChatMessage, UserProfile
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
@@ -14,3 +14,9 @@ class ChatSessionAdmin(admin.ModelAdmin):
 class ChatMessageAdmin(admin.ModelAdmin):
     list_display = ('session', 'role', 'created_at', 'content')
     list_filter = ('role', 'session')
+
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ('session_key', 'name', 'age', 'updated_at', 'created_at')
+    search_fields = ('session_key', 'name')

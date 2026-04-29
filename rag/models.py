@@ -124,3 +124,20 @@ class MemoryIndex(models.Model):
         verbose_name = 'Memory Index'
         verbose_name_plural = 'Memory Indices'
         unique_together = ['document', 'memory_type']
+
+
+class UserProfile(models.Model):
+    session_key = models.CharField(max_length=40, unique=True)
+    name = models.CharField(max_length=60, blank=True)
+    age = models.PositiveIntegerField(null=True, blank=True)
+    preferences = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        label = self.name or 'Nguoi dung'
+        return f"{label} ({self.session_key[:8]})"
+
+    class Meta:
+        verbose_name = 'User Profile'
+        verbose_name_plural = 'User Profiles'

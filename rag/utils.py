@@ -2,8 +2,6 @@ import os
 import re
 import json
 import logging
-import threading
-from datetime import datetime
 import unicodedata
 import pdfplumber
 import docx
@@ -11,7 +9,7 @@ import ollama
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaEmbeddings
-from .models import ChatMessage, ChatSession, ConversationMemory
+from .models import ChatMessage, ChatSession, ConversationMemory, UserProfile
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "8")
@@ -60,9 +58,6 @@ ASSISTANT_NAME = os.getenv("SMARTDOC_ASSISTANT_NAME", "Gemma 4")
 if _OLLAMA_MODE not in ("chat", "generate"):
     _OLLAMA_MODE = "generate"
 
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-USER_INFO_PATH = os.getenv("SMARTDOC_USER_INFO_PATH", os.path.join(_PROJECT_ROOT, "user_info.json"))
-
 _LOG_LEVEL = os.getenv("SMARTDOC_LOG_LEVEL", "INFO").upper()
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -78,7 +73,6 @@ if _LOG_VERBOSE or _LOG_RAW:
 _embedding_model_cache = {}
 _vector_store_cache = {}
 _installed_ollama_models_cache = None
-_user_info_lock = threading.Lock()
 
 
 def _log_debug(message, *args):
@@ -91,36 +85,6 @@ def _log_info(message, *args):
 
 def _log_warning(message, *args):
     _logger.warning(message, *args)
-
-
-def _load_user_info_unlocked():
-    if not os.path.exists(USER_INFO_PATH):
-        return {"version": 1, "users": {}}
-
-    try:
-        with open(USER_INFO_PATH, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        if not isinstance(data, dict):
-            return {"version": 1, "users": {}}
-        data.setdefault("version", 1)
-        data.setdefault("users", {})
-        if not isinstance(data["users"], dict):
-            data["users"] = {}
-        return data
-    except Exception as exc:
-        _log_warning("Cannot read user_info.json: %s", exc)
-        return {"version": 1, "users": {}}
-
-
-def _save_user_info_unlocked(data):
-    directory = os.path.dirname(USER_INFO_PATH)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-
-    tmp_path = USER_INFO_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=True, indent=2)
-    os.replace(tmp_path, USER_INFO_PATH)
 
 
 def _split_preferences(raw_text):
@@ -187,43 +151,37 @@ def update_user_profile(user_key, text):
     if not updates:
         return {}
 
-    with _user_info_lock:
-        data = _load_user_info_unlocked()
-        users = data.get("users", {})
-        user_data = users.get(user_key, {})
+    profile, _ = UserProfile.objects.get_or_create(session_key=user_key)
 
-        if "name" in updates:
-            user_data["name"] = updates["name"]
-        if "age" in updates:
-            user_data["age"] = updates["age"]
-        if "preferences" in updates:
-            existing = user_data.get("preferences", [])
-            combined = existing + [item for item in updates["preferences"] if item not in existing]
-            user_data["preferences"] = combined[:8]
+    if "name" in updates:
+        profile.name = updates["name"]
+    if "age" in updates:
+        profile.age = updates["age"]
+    if "preferences" in updates:
+        existing = profile.preferences or []
+        combined = existing + [item for item in updates["preferences"] if item not in existing]
+        profile.preferences = combined[:8]
 
-        user_data["updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        users[user_key] = user_data
-        data["users"] = users
-        _save_user_info_unlocked(data)
-
-    return user_data
+    profile.save()
+    return {
+        "name": profile.name,
+        "age": profile.age,
+        "preferences": profile.preferences or [],
+    }
 
 
 def get_user_profile_summary(user_key):
     if not user_key:
         return ""
 
-    with _user_info_lock:
-        data = _load_user_info_unlocked()
-        user_data = data.get("users", {}).get(user_key)
-
-    if not user_data:
+    profile = UserProfile.objects.filter(session_key=user_key).first()
+    if not profile:
         return ""
 
     parts = ["Nguoi dung"]
-    name = user_data.get("name")
-    age = user_data.get("age")
-    prefs = user_data.get("preferences") or []
+    name = profile.name
+    age = profile.age
+    prefs = profile.preferences or []
 
     if name:
         parts.append(f"Ten: {name}")
