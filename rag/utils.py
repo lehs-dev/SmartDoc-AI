@@ -43,6 +43,9 @@ _MAX_HISTORY_MESSAGES = int(os.getenv("SMARTDOC_HISTORY_MESSAGES", "2"))
 _MAX_HISTORY_CHARS = int(os.getenv("SMARTDOC_HISTORY_CHARS", "600"))
 _MAX_CONTEXT_CHARS = int(os.getenv("SMARTDOC_CONTEXT_CHARS", "1200"))
 _MAX_RAG_CHUNKS = int(os.getenv("SMARTDOC_RAG_CHUNKS", "1"))
+_MAX_MEMORY_CONTEXT_CHARS = int(os.getenv("SMARTDOC_MEMORY_CONTEXT_CHARS", "600"))
+_MAX_MEMORY_RAG_CHUNKS = int(os.getenv("SMARTDOC_MEMORY_RAG_CHUNKS", "2"))
+_MEMORY_VECTOR_DB_KEY = os.getenv("SMARTDOC_MEMORY_VECTOR_DB_KEY", "memory_v1_db")
 _KEEP_ALIVE = os.getenv("SMARTDOC_OLLAMA_KEEP_ALIVE", "10m")
 _NUM_CTX = int(os.getenv("SMARTDOC_NUM_CTX", "1024"))
 _NUM_PREDICT = int(os.getenv("SMARTDOC_NUM_PREDICT", "192"))
@@ -72,6 +75,8 @@ if _LOG_VERBOSE or _LOG_RAW:
 
 _embedding_model_cache = {}
 _vector_store_cache = {}
+_memory_vector_store_cache = {}
+_memory_text_cache = {}
 _installed_ollama_models_cache = None
 
 
@@ -733,6 +738,85 @@ def get_vector_store(chunks, embedding_model_name, vector_db_key):
     return vector_store
 
 
+def _resolve_memory_vector_base_path():
+    return os.path.join(VECTOR_DB_BASE_PATH, _MEMORY_VECTOR_DB_KEY)
+
+
+def _resolve_session_memory_path(session_id):
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        return ""
+    base_path = _resolve_memory_vector_base_path()
+    return os.path.join(base_path, f"session_{session_id}")
+
+
+def _get_session_memory_store(session_id, embedding_model_name=DEFAULT_EMBEDDING_MODEL):
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        return None
+
+    embedding_model_name = _normalize_embedding_model(embedding_model_name)
+    cache_key = f"memory::{embedding_model_name}::{session_id}"
+    if cache_key in _memory_vector_store_cache:
+        return _memory_vector_store_cache[cache_key]
+
+    vector_db_path = _resolve_session_memory_path(session_id)
+    if not vector_db_path:
+        _memory_vector_store_cache[cache_key] = None
+        return None
+
+    index_path = os.path.join(vector_db_path, "index.faiss")
+    if not os.path.exists(index_path):
+        _memory_vector_store_cache[cache_key] = None
+        return None
+
+    embeddings = get_embeddings_model(embedding_model_name)
+    _memory_vector_store_cache[cache_key] = FAISS.load_local(
+        vector_db_path,
+        embeddings,
+        allow_dangerous_deserialization=True,
+    )
+    return _memory_vector_store_cache[cache_key]
+
+
+def _save_session_memory_store(
+    session_id,
+    memory_text,
+    embedding_model_name=DEFAULT_EMBEDDING_MODEL,
+    force_update=False,
+):
+    session_id = _normalize_session_id(session_id)
+    if session_id is None:
+        return False
+
+    memory_text = (memory_text or "").strip()
+    if not memory_text:
+        return False
+
+    if not force_update and _memory_text_cache.get(session_id) == memory_text:
+        return False
+
+    embedding_model_name = _normalize_embedding_model(embedding_model_name)
+    embeddings = get_embeddings_model(embedding_model_name)
+
+    vector_store = FAISS.from_texts(
+        [memory_text],
+        embedding=embeddings,
+        metadatas=[{"session_id": session_id}],
+    )
+    vector_db_path = _resolve_session_memory_path(session_id)
+    if not vector_db_path:
+        return False
+
+    os.makedirs(vector_db_path, exist_ok=True)
+    vector_store.save_local(vector_db_path)
+
+    cache_key = f"memory::{embedding_model_name}::{session_id}"
+    _memory_vector_store_cache[cache_key] = vector_store
+    _memory_text_cache[session_id] = memory_text
+    return True
+
+
 def _build_general_chat_history(session_id):
     session_id = _normalize_session_id(session_id)
     if session_id is None:
@@ -988,6 +1072,69 @@ def extract_key_facts_from_conversation(messages, llm_model_name=DEFAULT_LLM_MOD
         return {"entities": [], "facts": [], "numbers": []}
 
 
+def _format_key_facts_for_memory(key_facts_json):
+    if not key_facts_json:
+        return ""
+
+    try:
+        data = json.loads(key_facts_json)
+    except Exception:
+        return ""
+
+    if not isinstance(data, dict):
+        return ""
+
+    parts = []
+    entities = data.get("entities") or []
+    facts = data.get("facts") or []
+    numbers = data.get("numbers") or []
+
+    if entities:
+        parts.append("Thuc the: " + ", ".join(entities[:6]))
+    if facts:
+        parts.append("Su kien: " + "; ".join(facts[:4]))
+    if numbers:
+        parts.append("Con so: " + ", ".join(numbers[:6]))
+
+    return "\n".join(parts)
+
+
+def _build_session_memory_text(memory):
+    if memory is None:
+        return ""
+
+    parts = []
+    summary = (memory.summary or "").strip()
+    if summary:
+        parts.append("Tom tat: " + summary)
+
+    facts = _format_key_facts_for_memory(memory.key_facts)
+    if facts:
+        parts.append(facts)
+
+    memory_text = "\n".join(parts).strip()
+    return _truncate_text(memory_text, max_chars=800)
+
+
+def _retrieve_memory_context(question, session_id, embedding_model_name=DEFAULT_EMBEDDING_MODEL):
+    session_id = _normalize_session_id(session_id)
+    if session_id is None or not question:
+        return ""
+
+    vector_store = _get_session_memory_store(session_id, embedding_model_name)
+    if vector_store is None:
+        return ""
+
+    k = max(1, min(_MAX_MEMORY_RAG_CHUNKS, 4))
+    try:
+        docs = vector_store.similarity_search(question, k=k)
+    except Exception:
+        return ""
+
+    context = "\n\n".join([doc.page_content for doc in docs if doc and doc.page_content])
+    return _truncate_text(context, _MAX_MEMORY_CONTEXT_CHARS)
+
+
 def update_conversation_memory(session_id, force_update=False):
     session_id = _normalize_session_id(session_id)
     if session_id is None:
@@ -1017,6 +1164,18 @@ def update_conversation_memory(session_id, force_update=False):
         memory.key_facts = json.dumps(facts, ensure_ascii=False)
 
     memory.save(update_fields=["summary", "key_facts", "last_updated"])
+
+    try:
+        memory_text = _build_session_memory_text(memory)
+        _save_session_memory_store(
+            session_id,
+            memory_text,
+            embedding_model_name=DEFAULT_EMBEDDING_MODEL,
+            force_update=force_update,
+        )
+    except Exception as exc:
+        _log_warning("Update memory vector failed: %s", exc)
+
     return memory
 
 
@@ -1038,9 +1197,20 @@ def ask_gemma_with_memory(
             return f"{user_profile}\n{memory_summary}" if memory_summary else user_profile
         return memory_summary
 
+    def _combine_memory_text(summary_text, recall_text):
+        summary_text = (summary_text or "").strip()
+        recall_text = (recall_text or "").strip()
+        if recall_text:
+            if summary_text:
+                return "\n\nBo nho lien quan:\n" + recall_text + "\n\n" + summary_text
+            return recall_text
+        return summary_text
+
     if not is_rag_mode:
         chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
         memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+        memory_recall = _retrieve_memory_context(question, session_id) if use_memory_augmentation else ""
+        memory_summary = _combine_memory_text(memory_summary, memory_recall)
         memory_summary = _merge_memory(memory_summary)
         return ask_llm_direct(
             question=question,
@@ -1052,6 +1222,8 @@ def ask_gemma_with_memory(
     if not embedding_model_name or not vector_db_key:
         chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
         memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+        memory_recall = _retrieve_memory_context(question, session_id) if use_memory_augmentation else ""
+        memory_summary = _combine_memory_text(memory_summary, memory_recall)
         memory_summary = _merge_memory(memory_summary)
         return ask_llm_direct(
             question=question,
@@ -1064,6 +1236,8 @@ def ask_gemma_with_memory(
     if vector_store is None:
         chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
         memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+        memory_recall = _retrieve_memory_context(question, session_id) if use_memory_augmentation else ""
+        memory_summary = _combine_memory_text(memory_summary, memory_recall)
         memory_summary = _merge_memory(memory_summary)
         return ask_llm_direct(
             question=question,
@@ -1074,6 +1248,8 @@ def ask_gemma_with_memory(
 
     chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
     memory_summary = _get_memory_summary(session_id) if use_memory_augmentation else ""
+    memory_recall = _retrieve_memory_context(question, session_id) if use_memory_augmentation else ""
+    memory_summary = _combine_memory_text(memory_summary, memory_recall)
     memory_summary = _merge_memory(memory_summary)
     context = _retrieve_context(vector_store, question, k_chunks=_MAX_RAG_CHUNKS)
     prompt = _build_rag_prompt(question, context, chat_history=chat_history, memory_summary=memory_summary)
