@@ -65,6 +65,23 @@ _RECENT_HISTORY_LIMIT = rag_config.RECENT_HISTORY_LIMIT
 _MEMORY_SUMMARY_MAX_CHARS = rag_config.MEMORY_SUMMARY_MAX_CHARS
 _MEMORY_TEXT_MAX_CHARS = rag_config.MEMORY_TEXT_MAX_CHARS
 _MEMORY_SUMMARY_SOURCE_CHARS = rag_config.MEMORY_SUMMARY_SOURCE_CHARS
+
+_QWEN_SYSTEM_PROMPT = """Bạn là trợ lý AI chất lượng cao.
+
+Nguyên tắc trả lời:
+1. Ưu tiên thông tin trong [TÀI LIỆU].
+2. Nếu [TÀI LIỆU] không đủ, sử dụng [BỘ NHỚ].
+3. Nếu không chắc, phải nói rõ "không đủ thông tin".
+4. Không được tự suy diễn ngoài dữ liệu.
+5. Trả lời bằng tiếng Việt tự nhiên, rõ ràng.
+6. Viết câu ngắn, có cấu trúc.
+
+Định dạng ưu tiên :
+- Câu trả lời rõ ràng, giọng điệu hàn lâm nhưng không cứng nhắc.
+- Nếu phức tạp, chia thành bullet
+
+"""
+
 if not logging.getLogger().handlers:
     logging.basicConfig(
         level=_LOG_LEVEL,
@@ -186,17 +203,17 @@ def get_user_profile_summary(user_key):
     if not profile:
         return ""
 
-    parts = ["Nguoi dung"]
+    parts = ["Người dùng"]
     name = profile.name
     age = profile.age
     prefs = profile.preferences or []
 
     if name:
-        parts.append(f"Ten: {name}")
+        parts.append(f"Tên: {name}")
     if age:
-        parts.append(f"Tuoi: {age}")
+        parts.append(f"Tuổi: {age}")
     if prefs:
-        parts.append("So thich: " + ", ".join(prefs))
+        parts.append("Sở thích: " + ", ".join(prefs))
 
     return "; ".join(parts)
 
@@ -295,13 +312,12 @@ def _merge_options(base, override):
 
 
 def _get_ollama_options(override=None):
-    if not _FAST_MODE:
-        return _merge_options({}, override)
-
     base = {
-        "num_ctx": max(256, _NUM_CTX),
-        "num_predict": max(64, _NUM_PREDICT),
-        "temperature": max(0.0, _TEMPERATURE),
+        "num_ctx": min(4096, _NUM_CTX),
+        "num_predict": min(512, _NUM_PREDICT),
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "repeat_penalty": 1.1,
     }
     return _merge_options(base, override)
 
@@ -347,16 +363,20 @@ def _extract_ollama_text(response_item, strip_text=True):
     return _normalize(response_text)
 
 
-def _ollama_stream(prompt, model_name, mode=None, options_override=None):
+def _ollama_stream(system_prompt, user_prompt, model_name, mode=None, options_override=None):
     mode = (mode or _OLLAMA_MODE).strip().lower()
     options = _get_ollama_options(options_override)
     if _LOG_VERBOSE:
-        _log_request(prompt, model_name, mode, options)
+        _log_request(user_prompt, model_name, mode, options)
 
     raw_logged = 0
     chunk_count = 0
 
+    system_prompt = (system_prompt or "").strip()
+    user_prompt = user_prompt or ""
+
     if mode == "generate":
+        prompt = f"{system_prompt}\n\n{user_prompt}".strip() if system_prompt else user_prompt
         response = ollama.generate(
             model=model_name,
             prompt=prompt,
@@ -365,13 +385,11 @@ def _ollama_stream(prompt, model_name, mode=None, options_override=None):
             stream=True,
         )
     else:
-        response = ollama.chat(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            options=options,
-            keep_alive=_KEEP_ALIVE,
-            stream=True,
-        )
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+        response = ollama.chat(model=model_name, messages=messages, options=options, keep_alive=_KEEP_ALIVE, stream=True)
 
     if isinstance(response, (dict, str, bytes)):
         _log_warning("Ollama stream returned non-iterable response type=%s", type(response))
@@ -400,13 +418,17 @@ def _ollama_stream(prompt, model_name, mode=None, options_override=None):
         _log_warning("Ollama stream had zero chunks")
 
 
-def _ollama_invoke(prompt, model_name, mode=None, options_override=None):
+def _ollama_invoke(system_prompt, user_prompt, model_name, mode=None, options_override=None):
     mode = (mode or _OLLAMA_MODE).strip().lower()
     options = _get_ollama_options(options_override)
     if _LOG_VERBOSE:
-        _log_request(prompt, model_name, mode, options)
+        _log_request(user_prompt, model_name, mode, options)
+
+    system_prompt = (system_prompt or "").strip()
+    user_prompt = user_prompt or ""
 
     if mode == "generate":
+        prompt = f"{system_prompt}\n\n{user_prompt}".strip() if system_prompt else user_prompt
         response = ollama.generate(
             model=model_name,
             prompt=prompt,
@@ -415,13 +437,11 @@ def _ollama_invoke(prompt, model_name, mode=None, options_override=None):
             stream=False,
         )
     else:
-        response = ollama.chat(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            options=options,
-            keep_alive=_KEEP_ALIVE,
-            stream=False,
-        )
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": user_prompt})
+        response = ollama.chat(model=model_name, messages=messages, options=options, keep_alive=_KEEP_ALIVE, stream=False)
 
     content = _extract_ollama_text(response)
     if not content:
@@ -439,17 +459,17 @@ def _stream_text_chunks(text, chunk_size=_STREAM_TEXT_CHUNK_SIZE):
         yield text[i:i + chunk_size]
 
 
-def _stream_with_fallback(prompt, model_name, fallback_prompt=None):
+def _stream_with_fallback(system_prompt, user_prompt, model_name, fallback_prompt=None):
     has_output = False
     primary_mode = _OLLAMA_MODE
     fallback_mode = "chat" if primary_mode == "generate" else "generate"
-    retry_prompt = fallback_prompt or prompt
+    retry_prompt = fallback_prompt or user_prompt
 
     if _LOG_VERBOSE:
         _log_info("LLM stream start model=%s primary=%s fallback=%s", model_name, primary_mode, fallback_mode)
 
     try:
-        for chunk in _ollama_stream(prompt, model_name, mode=primary_mode):
+        for chunk in _ollama_stream(system_prompt, user_prompt, model_name, mode=primary_mode):
             if not chunk:
                 continue
             has_output = True
@@ -461,7 +481,7 @@ def _stream_with_fallback(prompt, model_name, fallback_prompt=None):
         return
 
     try:
-        response_text = _ollama_invoke(prompt, model_name, mode=primary_mode)
+        response_text = _ollama_invoke(system_prompt, user_prompt, model_name, mode=primary_mode)
     except Exception as exc:
         _log_warning("LLM invoke error: %s", exc)
         response_text = ""
@@ -470,6 +490,7 @@ def _stream_with_fallback(prompt, model_name, fallback_prompt=None):
         _log_warning("Empty response, retry with num_predict=%s", _FALLBACK_NUM_PREDICT)
         try:
             response_text = _ollama_invoke(
+                system_prompt,
                 retry_prompt,
                 model_name,
                 mode=primary_mode,
@@ -481,7 +502,7 @@ def _stream_with_fallback(prompt, model_name, fallback_prompt=None):
 
     if not response_text:
         try:
-            response_text = _ollama_invoke(retry_prompt, model_name, mode=fallback_mode)
+            response_text = _ollama_invoke(system_prompt, retry_prompt, model_name, mode=fallback_mode)
         except Exception as exc:
             _log_warning("LLM fallback invoke error: %s", exc)
             response_text = ""
@@ -490,6 +511,7 @@ def _stream_with_fallback(prompt, model_name, fallback_prompt=None):
         _log_warning("Empty response, retry fallback with num_predict=%s", _FALLBACK_NUM_PREDICT)
         try:
             response_text = _ollama_invoke(
+                system_prompt,
                 retry_prompt,
                 model_name,
                 mode=fallback_mode,
@@ -849,102 +871,53 @@ def _build_general_prompt(question, chat_history="", memory_summary=""):
     identity_question = _is_ai_identity_question(question)
     safe_memory = "" if identity_question else memory_summary
 
-    if _RAW_PROMPT:
-        if safe_memory:
-            return (
-                "Ban la tro ly AI ho tro nguoi dung."
-                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
-                " Tra loi ngan gon, ro rang, dung vao cau hoi."
-                f"\nThong tin da biet: {safe_memory}"
-                f"\nUser: {question}\nAssistant:"
-            )
-        return (
-            "Ban la tro ly AI ho tro nguoi dung."
-            " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
-            " Tra loi ngan gon, ro rang, dung vao cau hoi."
-            f"\nUser: {question}\nAssistant:"
-        )
-
-    prompt_parts = [
-        "Ban la tro ly AI ho tro nguoi dung.",
-        "Neu tom tat hoac lich su co thong tin, hay dung de tra loi dung trong.",
-        "Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI.",
-        "Tra loi ngan gon, ro rang, dung vao cau hoi.",
-    ]
+    prompt_parts = []
 
     if safe_memory:
-        prompt_parts.append(f"Tom tat nho:\n{safe_memory}")
+        prompt_parts.append(f"[BỘ NHỚ]\n{safe_memory}")
 
     if chat_history:
-        prompt_parts.append(f"Lich su:\n{chat_history}")
+        prompt_parts.append(f"[LỊCH SỬ]\n{chat_history}")
 
-    prompt_parts.append(f"Hoi: {question}\nDap:")
-    return "\n\n".join(prompt_parts)
+    prompt_parts.append(f"[CÂU HỎI]\n{question}")
+    user_prompt = "\n\n".join(prompt_parts)
+    return _QWEN_SYSTEM_PROMPT, user_prompt
 
 
 def _build_rag_prompt(question, context, chat_history="", memory_summary=""):
     identity_question = _is_ai_identity_question(question)
     safe_memory = "" if identity_question else memory_summary
 
-    if _RAW_PROMPT:
-        if context and safe_memory:
-            return (
-                "Ban la tro ly AI ho tro nguoi dung."
-                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
-                " Tra loi ngan gon, ro rang, dung vao cau hoi."
-                f"\n{context}"
-                f"\nThong tin da biet: {safe_memory}"
-                f"\nUser: {question}\nAssistant:"
-            )
-        if context:
-            return (
-                "Ban la tro ly AI ho tro nguoi dung."
-                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
-                " Tra loi ngan gon, ro rang, dung vao cau hoi."
-                f"\n{context}\nUser: {question}\nAssistant:"
-            )
-        if safe_memory:
-            return (
-                "Ban la tro ly AI ho tro nguoi dung."
-                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
-                " Tra loi ngan gon, ro rang, dung vao cau hoi."
-                f"\nThong tin da biet: {safe_memory}"
-                f"\nUser: {question}\nAssistant:"
-            )
-        return (
-            "Ban la tro ly AI ho tro nguoi dung."
-            " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
-            " Tra loi ngan gon, ro rang, dung vao cau hoi."
-            f"\nUser: {question}\nAssistant:"
-        )
-
-    prompt_parts = [
-        "Ban la tro ly AI ho tro nguoi dung.",
-        "Uu tien ngu canh tai lieu neu co; neu khong du thong tin thi noi ro.",
-        "Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI.",
-        "Tra loi ngan gon, ro rang, dung vao cau hoi.",
-    ]
-
-    if safe_memory:
-        prompt_parts.append(f"Tom tat nho:\n{safe_memory}")
-
-    if chat_history:
-        prompt_parts.append(f"Lich su:\n{chat_history}")
+    prompt_parts = []
 
     if context:
-        prompt_parts.append(f"Ngu canh:\n{context}")
+        prompt_parts.append(f"[TÀI LIỆU]\n{context}")
 
-    prompt_parts.append(f"Hoi: {question}\nDap:")
-    return "\n\n".join(prompt_parts)
+    if safe_memory:
+        prompt_parts.append(f"[BỘ NHỚ]\n{safe_memory}")
+
+    if chat_history:
+        prompt_parts.append(f"[LỊCH SỬ]\n{chat_history}")
+
+    prompt_parts.append(f"[CÂU HỎI]\n{question}")
+    user_prompt = "\n\n".join(prompt_parts)
+    return _QWEN_SYSTEM_PROMPT, user_prompt
 
 
 def _retrieve_context(vector_store, question, k_chunks):
     if not vector_store:
         return ""
 
-    k = max(1, min(k_chunks, _RETRIEVE_MAX_K))
+    k = max(2, min(k_chunks, 6))
     docs = vector_store.similarity_search(question, k=k)
-    context = "\n\n".join([doc.page_content for doc in docs])
+    filtered = []
+    for doc in docs:
+        text = (doc.page_content or "").strip()
+        if len(text) < 40:
+            continue
+        filtered.append(text)
+
+    context = "\n\n---\n\n".join(filtered)
     return _truncate_text(context, _MAX_CONTEXT_CHARS)
 
 
@@ -968,9 +941,11 @@ def ask_gemma(
 
     model_name = resolve_llm_model(llm_model_name)
     context = _retrieve_context(vector_store, question, k_chunks=_MAX_RAG_CHUNKS)
-    prompt = _build_rag_prompt(question, context, chat_history=chat_history)
-    fallback_prompt = prompt if _RAW_PROMPT else (f"{context}\n\n{question}" if context else question)
-    return _stream_with_fallback(prompt, model_name, fallback_prompt=fallback_prompt)
+    system_prompt, user_prompt = _build_rag_prompt(question, context, chat_history=chat_history)
+    fallback_prompt = f"[CÂU HỎI]\n{question}"
+    if context:
+        fallback_prompt = f"[TÀI LIỆU]\n{context}\n\n[CÂU HỎI]\n{question}"
+    return _stream_with_fallback(system_prompt, user_prompt, model_name, fallback_prompt=fallback_prompt)
 
 
 # ============================================================================
@@ -984,9 +959,9 @@ def ask_llm_direct(
     memory_summary="",
 ):
     model_name = resolve_llm_model(llm_model_name)
-    prompt = _build_general_prompt(question, chat_history=chat_history, memory_summary=memory_summary)
-    fallback_prompt = prompt if _RAW_PROMPT else question
-    return _stream_with_fallback(prompt, model_name, fallback_prompt=fallback_prompt)
+    system_prompt, user_prompt = _build_general_prompt(question, chat_history=chat_history, memory_summary=memory_summary)
+    fallback_prompt = f"[CÂU HỎI]\n{question}"
+    return _stream_with_fallback(system_prompt, user_prompt, model_name, fallback_prompt=fallback_prompt)
 
 
 def get_recent_conversation_history(session_id, limit=_RECENT_HISTORY_LIMIT):
@@ -1094,11 +1069,11 @@ def _format_key_facts_for_memory(key_facts_json):
     numbers = data.get("numbers") or []
 
     if entities:
-        parts.append("Thuc the: " + ", ".join(entities[:6]))
+        parts.append("Thực thể: " + ", ".join(entities[:6]))
     if facts:
-        parts.append("Su kien: " + "; ".join(facts[:4]))
+        parts.append("Sự kiện: " + "; ".join(facts[:4]))
     if numbers:
-        parts.append("Con so: " + ", ".join(numbers[:6]))
+        parts.append("Con số: " + ", ".join(numbers[:6]))
 
     return "\n".join(parts)
 
@@ -1110,7 +1085,7 @@ def _build_session_memory_text(memory):
     parts = []
     summary = (memory.summary or "").strip()
     if summary:
-        parts.append("Tom tat: " + summary)
+        parts.append("Tóm tắt: " + summary)
 
     facts = _format_key_facts_for_memory(memory.key_facts)
     if facts:
@@ -1204,11 +1179,15 @@ def ask_gemma_with_memory(
     def _combine_memory_text(summary_text, recall_text):
         summary_text = (summary_text or "").strip()
         recall_text = (recall_text or "").strip()
+        parts = []
+
         if recall_text:
-            if summary_text:
-                return "\n\nBo nho lien quan:\n" + recall_text + "\n\n" + summary_text
-            return recall_text
-        return summary_text
+            parts.append(recall_text[:400])
+
+        if summary_text:
+            parts.append(summary_text[:300])
+
+        return "\n\n".join(parts)
 
     if not is_rag_mode:
         chat_history = _build_general_chat_history(session_id) if use_memory_augmentation else ""
@@ -1256,6 +1235,8 @@ def ask_gemma_with_memory(
     memory_summary = _combine_memory_text(memory_summary, memory_recall)
     memory_summary = _merge_memory(memory_summary)
     context = _retrieve_context(vector_store, question, k_chunks=_MAX_RAG_CHUNKS)
-    prompt = _build_rag_prompt(question, context, chat_history=chat_history, memory_summary=memory_summary)
-    fallback_prompt = prompt if _RAW_PROMPT else (f"{context}\n\n{question}" if context else question)
-    return _stream_with_fallback(prompt, model_name, fallback_prompt=fallback_prompt)
+    system_prompt, user_prompt = _build_rag_prompt(question, context, chat_history=chat_history, memory_summary=memory_summary)
+    fallback_prompt = f"[CÂU HỎI]\n{question}"
+    if context:
+        fallback_prompt = f"[TÀI LIỆU]\n{context}\n\n[CÂU HỎI]\n{question}"
+    return _stream_with_fallback(system_prompt, user_prompt, model_name, fallback_prompt=fallback_prompt)
