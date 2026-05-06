@@ -73,31 +73,39 @@ async def chat_with_ai(
     history_records = db.query(ChatMessage).filter(ChatMessage.session_id == req.session_id).order_by(ChatMessage.created_at.desc()).limit(6).all()
     history_records.reverse()
 
-    # 4. Lấy Semantic Memory trong FAISS với kỹ thuật query rewriting
-    search_query = req.message  # Có thể cải tiến bằng cách thêm tiền xử lý query
-    # Nếu một câu hỏi ngắn < 10 từ và có đủ lịch sử (ít nhất 3 tin nhắn: user cũ, ai cũ, user hiện tại)
-    if len(search_query.split()) < 10 and len(history_records) >= 3:
-        # Nối câu hỏi cũ của user với câu hỏi hiện tại
-        prev_user_msg = history_records[-3].content  # Câu hỏi của user trước đó
-        search_query = f"{prev_user_msg} {req.message}"
-        print(f"Đã rewrite query từ '{req.message}' thành '{search_query}' để tìm ngữ cảnh tốt hơn.")
+    # 4. Lấy Semantic Memory trong FAISS với Smart Query Rewriting
+    search_query = req.message
+    word_count = len(search_query.split())
     
-    context = search_context(search_query, req.session_id)
+    # CHỈ nối câu hỏi cũ nếu câu hỏi hiện tại QUÁ NGẮN (<= 5 từ) 
+    # (Ví dụ: "Vì sao?", "Chi tiết hơn đi", "Chắc chắn chứ?")
+    if word_count <= 5 and len(history_records) >= 3:
+        prev_user_msg = history_records[-3].content 
+        search_query = f"{prev_user_msg} {req.message}"
+        print(f"🔄 Đã rewrite query từ '{req.message}' thành '{search_query}'")
+    else:
+        print(f"🔎 Giữ nguyên query để FAISS tìm kiếm chính xác: '{search_query}'")
+    
+    # Truyền thêm top_k=6 để gọi hàm
+    context = search_context(search_query, req.session_id, top_k=6)
 
     # --- 5. LẤY LONG-TERM MEMORY TỪ DB RA ---
     profile = db.query(UserProfile).filter(UserProfile.name == req.session_id).first()
     long_term_facts = profile.preferences if profile else "Chưa có thông tin."
 
-    # 6. XÂY DỰNG MARAG SYSTEM PROMPT
+    # 6. XÂY DỰNG MARAG SYSTEM PROMPT RÕ RÀNG HƠN
     system_prompt = (
-        "Bạn là SmartDoc AI, trợ lý thông minh, nhiệt tình. Luôn giải thích cặn kẽ.\n"
-        f"📚 [THÔNG TIN ĐÃ GHI NHỚ VỀ USER]: {long_term_facts}\n"
+        "Bạn là SmartDoc AI. Hãy trả lời chính xác dựa vào ngữ cảnh.\n"
+        "Nếu ngữ cảnh có nhiều thông tin rải rác, hãy tổng hợp lại đầy đủ.\n"
+        f"📚 [SỰ KIỆN GHI NHỚ VỀ USER]: {long_term_facts}\n"
     )
     
     if context:
-        system_prompt += f"\n📄 [NGỮ CẢNH RAG]: Dựa vào tài liệu sau để trả lời:\n{context}"
+        system_prompt += f"\n📄 [TÀI LIỆU TRÍCH XUẤT]: Dựa vào đây để trả lời (không bịa thông tin):\n{context}\n"
 
     messages = [{"role": "system", "content": system_prompt}]
+    
+    # Để tránh AI nhầm lẫn giữa Lịch sử và Câu hỏi hiện tại, ta add lịch sử bình thường
     for msg in history_records:
         messages.append({"role": msg.role, "content": msg.content})
 
