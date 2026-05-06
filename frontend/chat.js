@@ -8,6 +8,7 @@ const md = window.markdownit({
     }
 });
 
+const currentSessionId = "session-" + Date.now();
 const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
 const chatHistory = document.getElementById('chat-history');
@@ -129,7 +130,7 @@ async function sendMessage() {
 
             const formData = new FormData();
             formData.append("file", fileToSend);
-            formData.append("session_id", "demo-session-1");
+            formData.append("session_id", currentSessionId);
 
             const uploadRes = await fetch('/api/upload', {
                 method: 'POST',
@@ -147,7 +148,7 @@ async function sendMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: text,
-                session_id: "demo-session-1"
+                session_id: currentSessionId
             })
         });
 

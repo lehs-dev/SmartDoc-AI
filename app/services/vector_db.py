@@ -38,8 +38,8 @@ def create_and_save_index(chunks: list[str], session_id: str):
         
     print(f"Đã tạo xong VectorDB cho session {session_id}")
 
-def search_context(query: str, session_id: str, top_k: int = 6) -> str:
-    """Tìm kiếm 6 đoạn văn bản liên quan nhất đến câu hỏi"""
+def search_context(query: str, session_id: str, top_k: int = 4) -> str:
+    """Tìm kiếm 4 đoạn văn bản liên quan nhất đến câu hỏi"""
     index_path = f"{VECTOR_DIR}/index_{session_id}.faiss"
     chunks_path = f"{VECTOR_DIR}/chunks_{session_id}.pkl"
 
