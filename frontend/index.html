@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartDoc AI - Pro</title>
+    <!-- Font chữ Google Sans/Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Google Material Icons (Bộ icon xịn giống Gemini) -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <!-- Highlight.js để tô màu code -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Sidebar mỏng bên trái -->
+    <aside class="sidebar">
+        <div class="top-actions">
+            <button class="icon-btn" title="Menu"><span class="material-symbols-outlined">menu</span></button>
+            <button class="icon-btn new-chat-btn" title="Đoạn chat mới" onclick="location.reload()">
+                <span class="material-symbols-outlined">edit_square</span>
+            </button>
+        </div>
+        <div class="bottom-actions">
+            <button class="icon-btn" title="Cài đặt"><span class="material-symbols-outlined">settings</span></button>
+        </div>
+    </aside>
+
+    <!-- Khu vực chính -->
+    <main class="main-content">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">SmartDoc AI</div>
+            <div class="header-right">
+                <span class="pro-badge">PRO</span>
+                <div class="user-avatar">H</div>
+            </div>
+        </header>
+
+        <!-- Màn hình chào mừng (Nằm giữa màn hình) -->
+        <div class="welcome-screen" id="welcome-screen">
+            <h1 class="greeting">Xin chào Hoangson!</h1>
+            <h2 class="sub-greeting">Chúng ta nên bắt đầu từ đâu nhỉ?</h2>
+            
+            <!-- Các thẻ gợi ý (Chips) -->
+            <div class="suggestion-chips">
+                <button class="chip"><span class="material-symbols-outlined">image</span> Tạo hình ảnh</button>
+                <button class="chip"><span class="material-symbols-outlined">music_note</span> Tạo nhạc</button>
+                <button class="chip"><span class="material-symbols-outlined">lightbulb</span> Giúp tôi học</button>
+                <button class="chip"><span class="material-symbols-outlined">edit_document</span> Tóm tắt tài liệu</button>
+            </div>
+        </div>
+
+        <!-- Lịch sử Chat (Ẩn lúc đầu) -->
+        <div class="chat-history" id="chat-history">
+            <!-- Tin nhắn sẽ được JS render vào đây -->
+        </div>
+
+        <!-- Khu vực Nhập liệu (Bottom/Center) -->
+        <div class="input-container">
+            <div class="input-box">
+                <!-- Khu vực hiển thị file đính kèm (Ẩn lúc đầu) -->
+                <div class="file-preview-area" id="file-preview-area" style="display: none;">
+                    <div class="file-card">
+                        <div class="file-info">
+                            <span class="file-name" id="file-name">baocao-nhom1-final</span>
+                            <span class="file-ext" id="file-ext">DOCX</span>
+                        </div>
+                        <button class="remove-file-btn" id="remove-file-btn" title="Xóa">
+                            <span class="material-symbols-outlined">close</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Ô nhập Text -->
+                <textarea id="chat-input" placeholder="Hỏi SmartDoc AI..." rows="1"></textarea>
+                
+                <!-- Thanh công cụ bên dưới textarea -->
+                <div class="input-toolbar">
+                    <div class="toolbar-left">
+                        <!-- Input ẩn để chọn file -->
+                        <input type="file" id="file-upload" style="display: none;" accept=".pdf,.docx,.txt">
+                        <button class="icon-btn" id="attach-btn" title="Thêm tệp">
+                            <span class="material-symbols-outlined">add</span>
+                        </button>
+                        <button class="text-btn">
+                            <span class="material-symbols-outlined">tune</span> Công cụ
+                        </button>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="text-btn model-selector">Pro <span class="material-symbols-outlined">expand_more</span></button>
+                        <button class="icon-btn" title="Micro">
+                            <span class="material-symbols-outlined">mic</span>
+                        </button>
+                        <button class="icon-btn send-btn" id="send-btn" title="Gửi" disabled>
+                            <span class="material-symbols-outlined">send</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-text">SmartDoc AI có thể đưa ra thông tin không chính xác. Hãy kiểm tra lại các thông tin quan trọng.</div>
+        </div>
+    </main>
+
+    <!-- Thư viện -->
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.0.0/dist/markdown-it.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="chat.js"></script>
+</body>
+</html>

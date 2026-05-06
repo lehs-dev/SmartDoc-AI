@@ -1,0 +1,224 @@
+# =========================
+
+# Python
+
+# =========================
+
+**pycache**/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# =========================
+
+# Virtual Environment
+
+# =========================
+
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# =========================
+
+# Environment Variables
+
+# =========================
+
+.env
+.env.*
+*.env
+
+# =========================
+
+# Logs & Database
+
+# =========================
+
+*.log
+*.sqlite3
+db.sqlite3
+
+# =========================
+
+# Cache & Temporary
+
+# =========================
+
+*.cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.pyre/
+
+# =========================
+
+# Jupyter Notebook
+
+# =========================
+
+.ipynb_checkpoints/
+
+# =========================
+
+# VSCode / IDE
+
+# =========================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+
+# OS Files
+
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+
+# Testing / Coverage
+
+# =========================
+
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# =========================
+
+# Type Checkers
+
+# =========================
+
+.pytype/
+
+# =========================
+
+# C Extensions
+
+# =========================
+
+*.pyd
+
+# =========================
+
+# PyInstaller
+
+# =========================
+
+*.manifest
+*.spec
+
+# =========================
+
+# Documentation builds
+
+# =========================
+
+docs/_build/
+
+# =========================
+
+# Docker
+
+# =========================
+
+.docker/
+docker-compose.override.yml
+
+# =========================
+
+# AI / ML / Vector DB
+
+# =========================
+
+vector_store/
+chroma/
+faiss_index/
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# =========================
+
+# Media / Uploads
+
+# =========================
+
+media/
+uploads/
+staticfiles/
+
+# =========================
+
+# Project-specific
+
+# =========================
+
+user_info.json
+
+# =========================
+
+# Node (nếu có frontend)
+
+# =========================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+
+# Build (Frontend)
+
+# =========================
+
+dist/
+build/
+
+# =========================
+
+# Misc
+
+# =========================
+
+*.bak
+*.tmp
+*.temp
