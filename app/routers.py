@@ -2,13 +2,15 @@ import os
 import shutil
 from app.services.doc_parser import extract_text, chunk_text
 from app.services.vector_db import create_and_save_index, search_context
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import ChatSession, ChatMessage
 from app.services.llm_client import stream_chat_response
+from app.services.memory import extract_and_update_long_term_memory
+from app.models import UserProfile
 
 router = APIRouter()
 
@@ -47,7 +49,10 @@ async def upload_document(
     }
 
 @router.post("/chat")
-async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
+async def chat_with_ai(
+    req: ChatRequest, 
+    background_tasks: BackgroundTasks, 
+    db: Session = Depends(get_db)):
     
     # 1. KIỂM TRA VÀ TẠO SESSION NẾU CHƯA CÓ
     session = db.query(ChatSession).filter(ChatSession.id == req.session_id).first()
@@ -61,41 +66,42 @@ async def chat_with_ai(req: ChatRequest, db: Session = Depends(get_db)):
     db.add(user_msg)
     db.commit()
 
-    # 3. LẤY LỊCH SỬ CHAT (Đã bao gồm cả câu user vừa hỏi ở bước 2)
-    history_records = db.query(ChatMessage)\
-        .filter(ChatMessage.session_id == req.session_id)\
-        .order_by(ChatMessage.created_at.desc())\
-        .limit(6).all()
+    # - Kich hoạt hàm chạy ngầm để trích xuất sự kiện quan trọng và cập nhật vào long-term memory -
+    background_tasks.add_task(extract_and_update_long_term_memory, req.session_id, req.message, db)
+
+    # 3. Lấy Short-term memory (Lịch sử 6 câu - Giữ nguyên)
+    history_records = db.query(ChatMessage).filter(ChatMessage.session_id == req.session_id).order_by(ChatMessage.created_at.desc()).limit(6).all()
     history_records.reverse()
 
-    # 4. TÌM NGỮ CẢNH TỪ FAISS (RAG)
+    # 4. Lấy Semantic Memory (FAISS - Giữ nguyên)
     context = search_context(req.message, req.session_id)
     
-    # 5. XÂY DỰNG NHÂN CÁCH VÀ NHỒI NGỮ CẢNH RAG
+    # --- 5. LẤY LONG-TERM MEMORY TỪ DB RA ---
+    profile = db.query(UserProfile).filter(UserProfile.name == req.session_id).first()
+    long_term_facts = profile.preferences if profile else "Chưa có thông tin."
+
+    # 6. XÂY DỰNG MARAG SYSTEM PROMPT
     system_prompt = (
-        "Bạn là SmartDoc AI, trợ lý thông minh, nhiệt tình và thân thiện. "
-        "Luôn giải thích cặn kẽ, chi tiết, dùng ngữ điệu tự nhiên, lịch sự và sử dụng emoji cho sinh động. "
+        "Bạn là SmartDoc AI, trợ lý thông minh, nhiệt tình. Luôn giải thích cặn kẽ.\n"
+        f"📚 [THÔNG TIN ĐÃ GHI NHỚ VỀ USER]: {long_term_facts}\n"
     )
+    
     if context:
-        system_prompt += f"\n\nDựa vào tài liệu sau đây để trả lời câu hỏi chính xác nhất (tuyệt đối không bịa thông tin):\n\n[TÀI LIỆU]:\n{context}"
+        system_prompt += f"\n📄 [NGỮ CẢNH RAG]: Dựa vào tài liệu sau để trả lời:\n{context}"
 
     messages = [{"role": "system", "content": system_prompt}]
-    
-    # Nhét lịch sử vào
     for msg in history_records:
         messages.append({"role": msg.role, "content": msg.content})
 
-    # 6. HÀM BỌC ĐỂ VỪA STREAM VỪA LƯU DB
     def stream_and_save():
+        # ... (Giữ nguyên logic yield stream và lưu db của ông) ...
         ai_full_response = ""
         for chunk in stream_chat_response(messages):
             ai_full_response += chunk
             yield chunk
             
-        # Lưu câu trả lời của AI vào DB khi stream xong
         ai_msg = ChatMessage(session_id=req.session_id, role="ai", content=ai_full_response)
         db.add(ai_msg)
         db.commit()
 
-    # 7. TRẢ VỀ LUỒNG STREAM
     return StreamingResponse(stream_and_save(), media_type="text/plain")

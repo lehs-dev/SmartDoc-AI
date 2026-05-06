@@ -2,27 +2,43 @@ import fitz  # PyMuPDF
 import docx
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+import fitz  # PyMuPDF
+import docx
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 def extract_text(file_path: str, filename: str) -> str:
-    """Trích xuất text từ PDF hoặc DOCX."""
+    """Trích xuất text từ PDF (xử lý đa cột) hoặc DOCX."""
     text = ""
     ext = filename.split('.')[-1].lower()
 
     try:
         if ext == 'pdf':
-            # PyMuPDF đọc PDF siêu nhanh bằng C
             doc = fitz.open(file_path)
             for page in doc:
-                text += page.get_text() + "\n"
+                # Lấy text dưới dạng các khối (blocks)
+                blocks = page.get_text("blocks")
+                
+                # blocks là list các tuple: (x0, y0, x1, y1, "text", block_no, block_type)
+                # Chỉ lấy block chứa text (block_type == 0)
+                text_blocks = [b for b in blocks if b[6] == 0]
+                
+                # Sắp xếp các block: Ưu tiên cột (trái sang phải - x0), sau đó từ trên xuống (y0)
+                # Mẹo: Chia tọa độ x0 thành các dải (vd: cách nhau 100px) để gom cột
+                text_blocks.sort(key=lambda b: (round(b[0] / 100), b[1]))
+                
+                for b in text_blocks:
+                    # Nối text của từng block lại, làm sạch khoảng trắng thừa
+                    clean_text = b[4].replace('\n', ' ').strip()
+                    if clean_text:
+                        text += clean_text + "\n\n"
             doc.close()
 
         elif ext == 'docx':
+            # ... (Giữ nguyên logic DOCX của ông) ...
             doc = docx.Document(file_path)
-            # 1. Rút text từ các đoạn văn bình thường
             for para in doc.paragraphs:
                 if para.text.strip():
                     text += para.text + "\n"
-            
-            # 2. RÚT TEXT TỪ BẢNG (Vũ khí bí mật để hỏi số liệu)
             for table in doc.tables:
                 for row in table.rows:
                     row_data = [cell.text.strip() for cell in row.cells if cell.text.strip()]
@@ -33,6 +49,7 @@ def extract_text(file_path: str, filename: str) -> str:
         print(f"Lỗi đọc file {filename}: {e}")
         
     return text
+
 
 def chunk_text(text: str) -> list[str]:
     """
