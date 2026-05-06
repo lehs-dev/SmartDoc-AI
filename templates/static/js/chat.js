@@ -33,8 +33,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const markdownRenderer = window.markdownit
         ? window.markdownit({ html: false, linkify: true, breaks: true })
         : null;
-    const REQUEST_TIMEOUT_MS = 90000;
-    const STREAM_IDLE_TIMEOUT_MS = 18000;
+    const REQUEST_TIMEOUT_MS = 300000;
+    const STREAM_IDLE_TIMEOUT_MS = 60000;
 
     if (documentSelect && documentSelect.value) {
         currentDocumentId = documentSelect.value;
