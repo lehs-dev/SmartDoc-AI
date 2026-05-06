@@ -73,9 +73,17 @@ async def chat_with_ai(
     history_records = db.query(ChatMessage).filter(ChatMessage.session_id == req.session_id).order_by(ChatMessage.created_at.desc()).limit(6).all()
     history_records.reverse()
 
-    # 4. Lấy Semantic Memory (FAISS - Giữ nguyên)
-    context = search_context(req.message, req.session_id)
+    # 4. Lấy Semantic Memory trong FAISS với kỹ thuật query rewriting
+    search_query = req.message  # Có thể cải tiến bằng cách thêm tiền xử lý query
+    # Nếu một câu hỏi ngắn < 10 từ và có đủ lịch sử (ít nhất 3 tin nhắn: user cũ, ai cũ, user hiện tại)
+    if len(search_query.split()) < 10 and len(history_records) >= 3:
+        # Nối câu hỏi cũ của user với câu hỏi hiện tại
+        prev_user_msg = history_records[-3].content  # Câu hỏi của user trước đó
+        search_query = f"{prev_user_msg} {req.message}"
+        print(f"Đã rewrite query từ '{req.message}' thành '{search_query}' để tìm ngữ cảnh tốt hơn.")
     
+    context = search_context(search_query, req.session_id)
+
     # --- 5. LẤY LONG-TERM MEMORY TỪ DB RA ---
     profile = db.query(UserProfile).filter(UserProfile.name == req.session_id).first()
     long_term_facts = profile.preferences if profile else "Chưa có thông tin."

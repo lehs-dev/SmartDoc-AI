@@ -2,12 +2,8 @@ import fitz  # PyMuPDF
 import docx
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-import fitz  # PyMuPDF
-import docx
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 def extract_text(file_path: str, filename: str) -> str:
-    """Trích xuất text từ PDF (xử lý đa cột) hoặc DOCX."""
+    """Trích xuất text từ PDF (xử lý đa cột + BẢNG BIỂU) hoặc DOCX."""
     text = ""
     ext = filename.split('.')[-1].lower()
 
@@ -15,19 +11,22 @@ def extract_text(file_path: str, filename: str) -> str:
         if ext == 'pdf':
             doc = fitz.open(file_path)
             for page in doc:
-                # Lấy text dưới dạng các khối (blocks)
+                # 1. ƯU TIÊN RÚT BẢNG BIỂU (TABLES) ĐỂ GIỮ NGUYÊN SỐ LIỆU
+                tables = page.find_tables()
+                for table in tables:
+                    text += "\n[DỮ LIỆU BẢNG]:\n"
+                    for row in table.extract():
+                        # Làm sạch NoneType và nối các ô bằng dấu |
+                        clean_row = [str(cell).strip().replace('\n', ' ') if cell else "" for cell in row]
+                        text += " | ".join(clean_row) + "\n"
+                    text += "\n"
+
+                # 2. XỬ LÝ TEXT ĐA CỘT (Tránh bị lộn xộn trái phải)
                 blocks = page.get_text("blocks")
-                
-                # blocks là list các tuple: (x0, y0, x1, y1, "text", block_no, block_type)
-                # Chỉ lấy block chứa text (block_type == 0)
                 text_blocks = [b for b in blocks if b[6] == 0]
-                
-                # Sắp xếp các block: Ưu tiên cột (trái sang phải - x0), sau đó từ trên xuống (y0)
-                # Mẹo: Chia tọa độ x0 thành các dải (vd: cách nhau 100px) để gom cột
                 text_blocks.sort(key=lambda b: (round(b[0] / 100), b[1]))
                 
                 for b in text_blocks:
-                    # Nối text của từng block lại, làm sạch khoảng trắng thừa
                     clean_text = b[4].replace('\n', ' ').strip()
                     if clean_text:
                         text += clean_text + "\n\n"
@@ -53,13 +52,12 @@ def extract_text(file_path: str, filename: str) -> str:
 
 def chunk_text(text: str) -> list[str]:
     """
-    Băm văn bản thành các khúc nhỏ.
-    Cấu hình Chunk size = 300 để ép FAISS tìm ra đúng chỗ chứa số liệu,
-    tránh LLM 7B bị ngợp thông tin (hallucinate).
+    Băm văn bản. TĂNG KÍCH THƯỚC CHUNK để chứa trọn vẹn được một cái bảng biểu,
+    không làm mất ngữ cảnh của các con số.
     """
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300,
-        chunk_overlap=50,
+        chunk_size=600,       # Tăng từ 300 lên 600
+        chunk_overlap=150,    # Tăng overlap để nối câu mượt hơn
         separators=["\n\n", "\n", ".", "!", "?", " ", ""]
     )
     return splitter.split_text(text)
