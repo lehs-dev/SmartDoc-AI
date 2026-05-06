@@ -1,55 +1,95 @@
+import json
+import re
 from sqlalchemy.orm import Session
 from app.models import UserProfile
-import ollama
 
-def extract_and_update_long_term_memory(user_id: str, user_message: str, db: Session):
-    """
-    Chạy ngầm: Nén và cập nhật trí nhớ dài hạn.
-    Thay vì cộng dồn, LLM sẽ hợp nhất ký ức cũ và thông tin mới thành một bản tóm tắt ngắn gọn.
-    """
-    profile = db.query(UserProfile).filter(UserProfile.name == user_id).first()
-    if not profile:
-        profile = UserProfile(name=user_id, preferences="Chưa có thông tin.")
-        db.add(profile)
-        db.commit()
+# Khởi tạo spaCy (Load 1 lần duy nhất để tối ưu tốc độ)
+nlp = None
+def get_nlp():
+    global nlp
+    if nlp is None:
+        import spacy
+        try:
+            # Load model đa ngôn ngữ (hỗ trợ Tiếng Việt)
+            nlp = spacy.load("xx_ent_wiki_sm") 
+        except OSError:
+            print("⚠️ Chưa tải model spaCy. Hãy chạy: python -m spacy download xx_ent_wiki_sm")
+            nlp = spacy.blank("xx") # Fallback an toàn để không crash
+    return nlp
 
-    # CHỐT CHẶN 1: Bỏ qua các câu chat quá ngắn hoặc vô nghĩa để tiết kiệm CPU
+def extract_and_update_long_term_memory(session_id: str, user_message: str, db: Session):
+    """
+    Phiên bản siêu nhẹ: Dùng spaCy NER và Regex thay cho LLM.
+    Chạy mất ~0.05 giây, không tốn chút CPU nào của Ollama.
+    """
     if len(user_message.split()) < 3:
         return
 
-    current_memory = profile.preferences
+    profile = db.query(UserProfile).filter(UserProfile.name == session_id).first()
+    if not profile:
+        profile = UserProfile(name=session_id, preferences="{}")
+        db.add(profile)
+        db.commit()
 
-    # PROMPT SIÊU NÉN: Ép AI gộp thông tin và tự động ghi đè nếu có mâu thuẫn
-    prompt = f"""
-    Bạn là hệ thống quản lý trí nhớ AI. Nhiệm vụ của bạn là cập nhật hồ sơ người dùng một cách NGẮN GỌN.
-    
-    [HỒ SƠ HIỆN TẠI]: {current_memory}
-    [TƯƠNG TÁC MỚI]: "{user_message}"
-    
-    Yêu cầu thực hiện:
-    1. Nếu [TƯƠNG TÁC MỚI] KHÔNG chứa thông tin cá nhân, sở thích, hay dữ kiện thực tế về người dùng -> Trả về y nguyên [HỒ SƠ HIỆN TẠI].
-    2. Nếu [TƯƠNG TÁC MỚI] có thông tin quan trọng -> Gộp nó vào hồ sơ. LOẠI BỎ thông tin cũ nếu bị mâu thuẫn (Ví dụ: Đổi tên, đổi ý định).
-    3. Tóm tắt lại toàn bộ thành MỘT ĐOẠN VĂN DUY NHẤT (tối đa 40 từ).
-    4. TUYỆT ĐỐI KHÔNG mở bài (không dùng câu "Hồ sơ mới là..."), KHÔNG giải thích, CHỈ in ra nội dung hồ sơ.
+    # Parse JSON memory hiện tại (Hoặc tạo mới nếu là dữ liệu text cũ)
+    try:
+        mem = json.loads(profile.preferences)
+    except:
+        mem = {}
+
+    _nlp = get_nlp()
+    doc = _nlp(user_message)
+
+    # Layer 1: Episodic (Trích xuất Tên, Tổ chức bằng spaCy NER)
+    for ent in doc.ents:
+        if ent.label_ == "PER" and len(ent.text) > 1:
+            mem["name"] = ent.text
+        elif ent.label_ == "ORG":
+            mem.setdefault("organizations", [])
+            if ent.text not in mem["organizations"]:
+                mem["organizations"].append(ent.text)
+
+    # Layer 2: Semantic (Trích xuất Sở thích bằng Regex)
+    likes = re.findall(r'(?:tôi (?:thích|yêu thích|quan tâm)|I (?:like|love|prefer))\s+(.+?)(?:\.|,|$)', 
+                        user_message, re.IGNORECASE)
+    if likes:
+        mem.setdefault("interests", [])
+        for l in likes:
+            clean = l.strip()[:50]
+            if clean and clean not in mem["interests"]:
+                mem["interests"].append(clean)
+
+    # Giới hạn kích thước mảng để DB không phình to (Chỉ nhớ 5-10 cái gần nhất)
+    if "organizations" in mem:
+        mem["organizations"] = mem["organizations"][-5:]
+    if "interests" in mem:
+        mem["interests"] = mem["interests"][-10:]
+
+    # Lưu lại vào DB dạng chuẩn JSON
+    profile.preferences = json.dumps(mem, ensure_ascii=False)
+    db.commit()
+    print(f"🧠 [Fast Memory Updated]: {mem}")
+
+def build_memory_context(session_id: str, db: Session) -> str:
     """
+    Đọc JSON từ DB và chuyển thành Text ngắn gọn để đưa vào System Prompt.
+    """
+    profile = db.query(UserProfile).filter(UserProfile.name == session_id).first()
+    if not profile:
+        return "Chưa có."
     
     try:
-        response = ollama.chat(
-            model="qcwind/qwen2.5-7B-instruct-Q4_K_M",
-            messages=[{"role": "user", "content": prompt}],
-            options={
-                "num_predict": 100, # CHỐT CHẶN 2: Giới hạn token trả về để không bị phình to
-                "temperature": 0.1  # Nhiệt độ thấp để tóm tắt chính xác, không sáng tạo thêm
-            }
-        )
-        
-        new_memory = response['message']['content'].strip()
-        
-        # Chỉ cập nhật nếu model trả về một chuỗi hợp lệ, không quá dài
-        if new_memory and len(new_memory) > 5 and len(new_memory) < 500:
-            profile.preferences = new_memory
-            db.commit()
-            print(f"🧠 [Memory Compressed]: {new_memory}")
-            
-    except Exception as e:
-        print(f"Lỗi cập nhật trí nhớ: {e}")
+        mem = json.loads(profile.preferences)
+    except:
+        # Tương thích ngược với dữ liệu cũ đang lưu kiểu text
+        return profile.preferences 
+
+    parts = []
+    if mem.get("name"):
+        parts.append(f"Tên user: {mem['name']}")
+    if mem.get("interests"):
+        parts.append(f"Sở thích: {', '.join(mem['interests'])}")
+    if mem.get("organizations"):
+        parts.append(f"Tổ chức liên quan: {', '.join(mem['organizations'])}")
+    
+    return "; ".join(parts) if parts else "Chưa có."

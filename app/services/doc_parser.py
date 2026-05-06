@@ -10,30 +10,33 @@ def extract_text(file_path: str, filename: str) -> str:
     try:
         if ext == 'pdf':
             doc = fitz.open(file_path)
-            for page in doc:
-                # 1. ƯU TIÊN RÚT BẢNG BIỂU (TABLES) ĐỂ GIỮ NGUYÊN SỐ LIỆU
+            for page_num, page in enumerate(doc):
+                table_bboxes = [] # Lưu tọa độ các bảng
                 tables = page.find_tables()
                 for table in tables:
-                    text += "\n[DỮ LIỆU BẢNG]:\n"
+                    table_bboxes.append(table.bbox)
+                    text += f"\n[TRANG {page_num+1} - BẢNG]:\n"
                     for row in table.extract():
-                        # Làm sạch NoneType và nối các ô bằng dấu |
                         clean_row = [str(cell).strip().replace('\n', ' ') if cell else "" for cell in row]
                         text += " | ".join(clean_row) + "\n"
                     text += "\n"
 
-                # 2. XỬ LÝ TEXT ĐA CỘT (Tránh bị lộn xộn trái phải)
+                # Lấy text thông thường
                 blocks = page.get_text("blocks")
-                text_blocks = [b for b in blocks if b[6] == 0]
-                text_blocks.sort(key=lambda b: (round(b[0] / 100), b[1]))
-                
-                for b in text_blocks:
+                for b in blocks:
+                    if b[6] != 0: continue # Bỏ qua image blocks
+
+                    block_rect = fitz.Rect(b[:4])
+                    # Nếu block text này nằm trong khu vực của BẢNG -> Bỏ qua để tránh duplicate
+                    if any(block_rect.intersects(fitz.Rect(tb)) for tb in table_bboxes):
+                        continue
+
                     clean_text = b[4].replace('\n', ' ').strip()
                     if clean_text:
                         text += clean_text + "\n\n"
             doc.close()
 
         elif ext == 'docx':
-            # ... (Giữ nguyên logic DOCX của ông) ...
             doc = docx.Document(file_path)
             for para in doc.paragraphs:
                 if para.text.strip():

@@ -38,30 +38,34 @@ def create_and_save_index(chunks: list[str], session_id: str):
         
     print(f"Đã tạo xong VectorDB cho session {session_id}")
 
+
+_index_cache = {}  # Dict lưu cache: session_id -> (index, chunks, mtime)
+
 def search_context(query: str, session_id: str, top_k: int = 4) -> str:
-    """Tìm kiếm 4 đoạn văn bản liên quan nhất đến câu hỏi"""
     index_path = f"{VECTOR_DIR}/index_{session_id}.faiss"
     chunks_path = f"{VECTOR_DIR}/chunks_{session_id}.pkl"
 
-    # Nếu session này chưa up tài liệu nào, trả về rỗng
     if not os.path.exists(index_path) or not os.path.exists(chunks_path):
         return ""
 
-    # Load FAISS và Chunks lên
-    index = faiss.read_index(index_path)
-    with open(chunks_path, "rb") as f:
-        chunks = pickle.load(f)
+    # Kiểm tra thời gian sửa file cuối cùng
+    mtime = os.path.getmtime(index_path)
+    
+    # Nếu chưa có trong cache hoặc file bị sửa đổi -> Đọc từ đĩa
+    if session_id not in _index_cache or _index_cache[session_id][2] != mtime:
+        index = faiss.read_index(index_path)
+        with open(chunks_path, "rb") as f:
+            chunks = pickle.load(f)
+        _index_cache[session_id] = (index, chunks, mtime)
 
-    # Lấy vector của câu hỏi
+    # Lấy từ RAM
+    index, chunks, _ = _index_cache[session_id]
+
     query_vector = np.array([get_embedding(query)]).astype('float32')
-
-    # Tìm Top_K đoạn giống nhất
     distances, indices = index.search(query_vector, top_k)
     
-    # Gom chữ lại thành 1 cục context
     context = ""
     for idx in indices[0]:
         if idx != -1 and idx < len(chunks):
             context += chunks[idx] + "\n\n"
-            
     return context.strip()

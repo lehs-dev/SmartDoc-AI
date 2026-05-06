@@ -4,11 +4,12 @@ import json
 # Khai báo model (Dùng đúng bản Q4 ông đã pull về)
 LLM_MODEL = "qcwind/qwen2.5-7B-instruct-Q4_K_M"
 
-# Cấu hình "Hack" ép CPU chạy mượt
 OLLAMA_OPTIONS = {
-    "num_thread": 4,     # Chỉ dùng 4 nhân P-Core
-    "num_ctx": 2048,     # Giới hạn context để xử lý lẹ
-    "temperature": 0.1   # Giữ cho AI trả lời nghiêm túc, bám sát tài liệu
+    "num_thread": 8,      # Tăng lên 8 luồng cho i5
+    "num_ctx": 1024,      # Giảm xuống 1024 để Warm-up siêu tốc
+    "num_batch": 512,     # Giúp xử lý prompt dài nhanh hơn
+    "temperature": 0.1,
+    "repeat_penalty": 1.1 # Ngăn AI nói lặp từ vô nghĩa
 }
 
 def stream_chat_response(messages: list):
