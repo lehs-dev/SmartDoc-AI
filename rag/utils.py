@@ -10,11 +10,12 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaEmbeddings
 from .models import ChatMessage, ChatSession, ConversationMemory, UserProfile
+from . import config as rag_config
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("OMP_NUM_THREADS", "8")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "8")
-os.environ.setdefault("MKL_NUM_THREADS", "8")
+os.environ.setdefault("HF_HUB_OFFLINE", rag_config.HF_HUB_OFFLINE)
+os.environ.setdefault("OMP_NUM_THREADS", rag_config.OMP_NUM_THREADS)
+os.environ.setdefault("OPENBLAS_NUM_THREADS", rag_config.OPENBLAS_NUM_THREADS)
+os.environ.setdefault("MKL_NUM_THREADS", rag_config.MKL_NUM_THREADS)
 
 try:
     import fitz as _fitz
@@ -22,46 +23,48 @@ try:
 except ImportError:
     _HAS_PYMUPDF = False
 
-VECTOR_DB_BASE_PATH = "vector_store"
+VECTOR_DB_BASE_PATH = rag_config.VECTOR_DB_BASE_PATH
 
-DEFAULT_LLM_MODEL = os.getenv("SMARTDOC_LLM_MODEL", "ibm/granite4.1:8b-q8_0")
-DEFAULT_EMBEDDING_MODEL = os.getenv("SMARTDOC_EMBEDDING_MODEL", "nomic-embed-text")
-DEFAULT_VECTOR_DB_KEY = os.getenv("SMARTDOC_VECTOR_DB_KEY", "nomic_v1_db")
+DEFAULT_LLM_MODEL = rag_config.DEFAULT_LLM_MODEL
+DEFAULT_EMBEDDING_MODEL = rag_config.DEFAULT_EMBEDDING_MODEL
+DEFAULT_VECTOR_DB_KEY = rag_config.DEFAULT_VECTOR_DB_KEY
 
-SUPPORTED_LLM_MODELS = [DEFAULT_LLM_MODEL]
-SUPPORTED_EMBEDDING_MODELS = [DEFAULT_EMBEDDING_MODEL]
+SUPPORTED_LLM_MODELS = rag_config.SUPPORTED_LLM_MODELS
+SUPPORTED_EMBEDDING_MODELS = rag_config.SUPPORTED_EMBEDDING_MODELS
 
-VECTOR_DB_CONFIG = {
-    DEFAULT_VECTOR_DB_KEY: {
-        "path": os.path.join(VECTOR_DB_BASE_PATH, DEFAULT_VECTOR_DB_KEY),
-        "embedding_model": DEFAULT_EMBEDDING_MODEL,
-    },
-}
+VECTOR_DB_CONFIG = rag_config.VECTOR_DB_CONFIG
 
-_FAST_MODE = os.getenv("SMARTDOC_FAST_MODE", "0") != "0"
-_MAX_HISTORY_MESSAGES = int(os.getenv("SMARTDOC_HISTORY_MESSAGES", "8"))
-_MAX_HISTORY_CHARS = int(os.getenv("SMARTDOC_HISTORY_CHARS", "600"))
-_MAX_CONTEXT_CHARS = int(os.getenv("SMARTDOC_CONTEXT_CHARS", "4000"))
-_MAX_RAG_CHUNKS = int(os.getenv("SMARTDOC_RAG_CHUNKS", "3"))
-_MAX_MEMORY_CONTEXT_CHARS = int(os.getenv("SMARTDOC_MEMORY_CONTEXT_CHARS", "600"))
-_MAX_MEMORY_RAG_CHUNKS = int(os.getenv("SMARTDOC_MEMORY_RAG_CHUNKS", "2"))
-_MEMORY_VECTOR_DB_KEY = os.getenv("SMARTDOC_MEMORY_VECTOR_DB_KEY", "memory_v1_db")
-_KEEP_ALIVE = os.getenv("SMARTDOC_OLLAMA_KEEP_ALIVE", "5m")
-_NUM_CTX = int(os.getenv("SMARTDOC_NUM_CTX", "4096"))
-_NUM_PREDICT = int(os.getenv("SMARTDOC_NUM_PREDICT", "1024"))
-_TEMPERATURE = float(os.getenv("SMARTDOC_TEMPERATURE", "0.2"))
-_OLLAMA_MODE = os.getenv("SMARTDOC_OLLAMA_MODE", "generate").strip().lower()
-_LOG_PROMPT = os.getenv("SMARTDOC_LOG_PROMPT", "0") == "1"
-_LOG_VERBOSE = os.getenv("SMARTDOC_LOG_VERBOSE", "0") == "1"
-_LOG_RAW = os.getenv("SMARTDOC_LOG_RAW", "0") == "1"
-_LOG_RAW_LIMIT = int(os.getenv("SMARTDOC_LOG_RAW_LIMIT", "3"))
-_FALLBACK_NUM_PREDICT = int(os.getenv("SMARTDOC_FALLBACK_NUM_PREDICT", "1024"))
-_RAW_PROMPT = os.getenv("SMARTDOC_RAW_PROMPT", "1") == "1"
-ASSISTANT_NAME = os.getenv("SMARTDOC_ASSISTANT_NAME", "Gemma 4")
-if _OLLAMA_MODE not in ("chat", "generate"):
-    _OLLAMA_MODE = "generate"
+_FAST_MODE = rag_config.FAST_MODE
+_MAX_HISTORY_MESSAGES = rag_config.MAX_HISTORY_MESSAGES
+_MAX_HISTORY_CHARS = rag_config.MAX_HISTORY_CHARS
+_MAX_CONTEXT_CHARS = rag_config.MAX_CONTEXT_CHARS
+_MAX_RAG_CHUNKS = rag_config.MAX_RAG_CHUNKS
+_MAX_MEMORY_CONTEXT_CHARS = rag_config.MAX_MEMORY_CONTEXT_CHARS
+_MAX_MEMORY_RAG_CHUNKS = rag_config.MAX_MEMORY_RAG_CHUNKS
+_MEMORY_VECTOR_DB_KEY = rag_config.MEMORY_VECTOR_DB_KEY
+_KEEP_ALIVE = rag_config.OLLAMA_KEEP_ALIVE
+_NUM_CTX = rag_config.NUM_CTX
+_NUM_PREDICT = rag_config.NUM_PREDICT
+_TEMPERATURE = rag_config.TEMPERATURE
+_OLLAMA_MODE = rag_config.OLLAMA_MODE
+_LOG_PROMPT = rag_config.LOG_PROMPT
+_LOG_VERBOSE = rag_config.LOG_VERBOSE
+_LOG_RAW = rag_config.LOG_RAW
+_LOG_RAW_LIMIT = rag_config.LOG_RAW_LIMIT
+_FALLBACK_NUM_PREDICT = rag_config.FALLBACK_NUM_PREDICT
+_RAW_PROMPT = rag_config.RAW_PROMPT
+ASSISTANT_NAME = rag_config.ASSISTANT_NAME
 
-_LOG_LEVEL = os.getenv("SMARTDOC_LOG_LEVEL", "INFO").upper()
+_LOG_LEVEL = rag_config.LOG_LEVEL
+_STREAM_TEXT_CHUNK_SIZE = rag_config.STREAM_TEXT_CHUNK_SIZE
+_TEXT_CHUNK_SIZE = rag_config.TEXT_CHUNK_SIZE
+_TEXT_CHUNK_OVERLAP = rag_config.TEXT_CHUNK_OVERLAP
+_TEXT_CHUNK_SEPARATORS = rag_config.TEXT_CHUNK_SEPARATORS
+_RETRIEVE_MAX_K = rag_config.RETRIEVE_MAX_K
+_RECENT_HISTORY_LIMIT = rag_config.RECENT_HISTORY_LIMIT
+_MEMORY_SUMMARY_MAX_CHARS = rag_config.MEMORY_SUMMARY_MAX_CHARS
+_MEMORY_TEXT_MAX_CHARS = rag_config.MEMORY_TEXT_MAX_CHARS
+_MEMORY_SUMMARY_SOURCE_CHARS = rag_config.MEMORY_SUMMARY_SOURCE_CHARS
 if not logging.getLogger().handlers:
     logging.basicConfig(
         level=_LOG_LEVEL,
@@ -430,7 +433,7 @@ def _ollama_invoke(prompt, model_name, mode=None, options_override=None):
     return content
 
 
-def _stream_text_chunks(text, chunk_size=120):
+def _stream_text_chunks(text, chunk_size=_STREAM_TEXT_CHUNK_SIZE):
     text = text or ""
     for i in range(0, len(text), chunk_size):
         yield text[i:i + chunk_size]
@@ -683,10 +686,10 @@ def get_text_chunks(text):
 
 
 def get_text_chunks_optimized(text, file_size_mb=0, has_vietnamese=False):
-    chunk_size = 500
-    chunk_overlap = 50
+    chunk_size = _TEXT_CHUNK_SIZE
+    chunk_overlap = _TEXT_CHUNK_OVERLAP
 
-    separators = ["\n\n", "\n", "!", "?", ".", " ", ""]
+    separators = list(_TEXT_CHUNK_SEPARATORS)
 
     chunks = _split_text_chunks(
         text,
@@ -836,7 +839,7 @@ def _get_memory_summary(session_id):
     if not memory or not memory.summary:
         return ""
 
-    summary = _truncate_text(memory.summary, 300)
+    summary = _truncate_text(memory.summary, _MEMORY_SUMMARY_MAX_CHARS)
     if "không phản hồi" in summary.lower():
         return ""
     return summary
@@ -939,7 +942,7 @@ def _retrieve_context(vector_store, question, k_chunks):
     if not vector_store:
         return ""
 
-    k = max(1, min(k_chunks, 4))
+    k = max(1, min(k_chunks, _RETRIEVE_MAX_K))
     docs = vector_store.similarity_search(question, k=k)
     context = "\n\n".join([doc.page_content for doc in docs])
     return _truncate_text(context, _MAX_CONTEXT_CHARS)
@@ -986,7 +989,7 @@ def ask_llm_direct(
     return _stream_with_fallback(prompt, model_name, fallback_prompt=fallback_prompt)
 
 
-def get_recent_conversation_history(session_id, limit=3):
+def get_recent_conversation_history(session_id, limit=_RECENT_HISTORY_LIMIT):
     session_id = _normalize_session_id(session_id)
     if session_id is None:
         return []
@@ -1114,7 +1117,7 @@ def _build_session_memory_text(memory):
         parts.append(facts)
 
     memory_text = "\n".join(parts).strip()
-    return _truncate_text(memory_text, max_chars=800)
+    return _truncate_text(memory_text, max_chars=_MEMORY_TEXT_MAX_CHARS)
 
 
 def _retrieve_memory_context(question, session_id, embedding_model_name=DEFAULT_EMBEDDING_MODEL):
@@ -1126,7 +1129,7 @@ def _retrieve_memory_context(question, session_id, embedding_model_name=DEFAULT_
     if vector_store is None:
         return ""
 
-    k = max(1, min(_MAX_MEMORY_RAG_CHUNKS, 4))
+    k = max(1, min(_MAX_MEMORY_RAG_CHUNKS, _RETRIEVE_MAX_K))
     try:
         docs = vector_store.similarity_search(question, k=k)
     except Exception:
@@ -1143,7 +1146,7 @@ def update_conversation_memory(session_id, force_update=False):
 
     messages = list(
         ChatMessage.objects.filter(session_id=session_id)
-        .order_by("-created_at")[:3]
+        .order_by("-created_at")[:_RECENT_HISTORY_LIMIT]
     )
     messages.reverse()
 
@@ -1156,7 +1159,7 @@ def update_conversation_memory(session_id, force_update=False):
 
     user_messages = [msg for msg in messages if msg.role == "user"]
     summary_source = user_messages or messages
-    summary = _format_recent_messages(summary_source, max_chars=400)
+    summary = _format_recent_messages(summary_source, max_chars=_MEMORY_SUMMARY_SOURCE_CHARS)
     if summary:
         memory.summary = summary
 

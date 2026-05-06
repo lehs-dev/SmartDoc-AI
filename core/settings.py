@@ -11,27 +11,38 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
-import os
+
+from core.env import (
+    load_env_file,
+    get_env,
+    get_env_bool,
+    get_env_int,
+    get_env_list,
+)
+
+load_env_file()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _resolve_path(raw_path):
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return BASE_DIR / raw_path
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-&ryn=ny_z14=i06e(4s%e&gxav0(2-6-t@0d3=7h93(280t^pg'
+SECRET_KEY = get_env("DJANGO_SECRET_KEY", required=True)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = get_env_bool("DJANGO_DEBUG", required=True)
 
-ALLOWED_HOSTS = [
-    'localhost',
-    '127.0.0.1',
-    '[::1]',
-    'testserver',
-]
+ALLOWED_HOSTS = get_env_list("DJANGO_ALLOWED_HOSTS", required=True)
 
 
 # Application definition
@@ -79,10 +90,12 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+_db_engine = get_env("DJANGO_DB_ENGINE", required=True)
+_db_name = get_env("DJANGO_DB_NAME", required=True)
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+    "default": {
+        "ENGINE": _db_engine,
+        "NAME": _resolve_path(_db_name),
     }
 }
 
@@ -109,32 +122,42 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = get_env("DJANGO_LANGUAGE_CODE", required=True)
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = get_env("DJANGO_TIME_ZONE", required=True)
 
-USE_I18N = True
+USE_I18N = get_env_bool("DJANGO_USE_I18N", required=True)
 
-USE_TZ = True
+USE_TZ = get_env_bool("DJANGO_USE_TZ", required=True)
 
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
-STATICFILES_DIRS = [
-    BASE_DIR / 'templates' / 'static',
-]
+STATIC_URL = get_env("DJANGO_STATIC_URL", required=True)
+_static_dirs = get_env_list("DJANGO_STATICFILES_DIRS", required=True)
+STATICFILES_DIRS = [_resolve_path(path) for path in _static_dirs]
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+DEFAULT_AUTO_FIELD = get_env("DJANGO_DEFAULT_AUTO_FIELD", required=True)
 
 # Đường dẫn file được upload
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = get_env("DJANGO_MEDIA_URL", required=True)
+MEDIA_ROOT = _resolve_path(get_env("DJANGO_MEDIA_ROOT", required=True))
 
 # Giới hạn kích thước upload (50MB + overhead)
-DATA_UPLOAD_MAX_MEMORY_SIZE = 52_428_800   # ~50MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 52_428_800   # ~50MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = get_env_int("DJANGO_DATA_UPLOAD_MAX_MEMORY_SIZE", required=True)
+FILE_UPLOAD_MAX_MEMORY_SIZE = get_env_int("DJANGO_FILE_UPLOAD_MAX_MEMORY_SIZE", required=True)
+
+SMARTDOC_UI_CONFIG = {
+    "requestTimeoutMs": get_env_int("SMARTDOC_UI_REQUEST_TIMEOUT_MS", required=True),
+    "streamIdleTimeoutMs": get_env_int("SMARTDOC_UI_STREAM_IDLE_TIMEOUT_MS", required=True),
+    "textareaMaxHeight": get_env_int("SMARTDOC_UI_TEXTAREA_MAX_HEIGHT", required=True),
+    "toastDurationMs": get_env_int("SMARTDOC_UI_TOAST_DURATION_MS", required=True),
+    "toastExitMs": get_env_int("SMARTDOC_UI_TOAST_EXIT_MS", required=True),
+    "uploadReloadDelayMs": get_env_int("SMARTDOC_UI_UPLOAD_RELOAD_DELAY_MS", required=True),
+    "statusClearDelayMs": get_env_int("SMARTDOC_UI_STATUS_CLEAR_DELAY_MS", required=True),
+    "deleteRedirectDelayMs": get_env_int("SMARTDOC_UI_DELETE_REDIRECT_DELAY_MS", required=True),
+}

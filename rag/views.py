@@ -1,5 +1,6 @@
 from django.shortcuts import render
 from django.contrib import messages
+from django.conf import settings
 from .models import Document, ChatSession, ChatMessage
 from .utils import (
     process_document_optimized,
@@ -12,6 +13,7 @@ from .utils import (
     update_user_profile,
     DEFAULT_LLM_MODEL,
 )
+from . import config as rag_config
 import json
 from django.http import JsonResponse, StreamingHttpResponse
 
@@ -20,7 +22,7 @@ from django.http import JsonResponse, StreamingHttpResponse
 # UPLOAD VALIDATION: MIME type + File size limit
 # ============================================================================
 
-MAX_UPLOAD_SIZE_MB = 50
+MAX_UPLOAD_SIZE_MB = rag_config.UPLOAD_MAX_MB
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 # Magic bytes cho kiểm tra MIME type
@@ -106,6 +108,7 @@ def index(request):
                     'current_messages': current_messages,
                     'current_document_id': '',
                     'default_llm_model': llm_models[0] if llm_models else DEFAULT_LLM_MODEL,
+                    'ui_config': settings.SMARTDOC_UI_CONFIG,
                 })
             
             lower_name = uploaded_file.name.lower()
@@ -186,6 +189,7 @@ def index(request):
         'current_document_id': current_document_id,
         'current_session_id': current_session_id,
         'current_messages': current_messages,
+        'ui_config': settings.SMARTDOC_UI_CONFIG,
     }
     return render(request, 'rag/index.html', context)
 

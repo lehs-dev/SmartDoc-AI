@@ -33,8 +33,25 @@ document.addEventListener('DOMContentLoaded', function () {
     const markdownRenderer = window.markdownit
         ? window.markdownit({ html: false, linkify: true, breaks: true })
         : null;
-    const REQUEST_TIMEOUT_MS = 300000;
-    const STREAM_IDLE_TIMEOUT_MS = 60000;
+    const uiConfigEl = document.getElementById('smartdoc-ui-config');
+    const uiConfig = uiConfigEl ? JSON.parse(uiConfigEl.textContent) : {};
+
+    function requireUiNumber(key) {
+        const value = Number(uiConfig && uiConfig[key]);
+        if (!Number.isFinite(value)) {
+            throw new Error('Missing UI config: ' + key);
+        }
+        return value;
+    }
+
+    const REQUEST_TIMEOUT_MS = requireUiNumber('requestTimeoutMs');
+    const STREAM_IDLE_TIMEOUT_MS = requireUiNumber('streamIdleTimeoutMs');
+    const TEXTAREA_MAX_HEIGHT = requireUiNumber('textareaMaxHeight');
+    const TOAST_DURATION_MS = requireUiNumber('toastDurationMs');
+    const TOAST_EXIT_MS = requireUiNumber('toastExitMs');
+    const UPLOAD_RELOAD_DELAY_MS = requireUiNumber('uploadReloadDelayMs');
+    const STATUS_CLEAR_DELAY_MS = requireUiNumber('statusClearDelayMs');
+    const DELETE_REDIRECT_DELAY_MS = requireUiNumber('deleteRedirectDelayMs');
 
     if (documentSelect && documentSelect.value) {
         currentDocumentId = documentSelect.value;
@@ -78,8 +95,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
         setTimeout(() => {
             toast.classList.remove('is-visible');
-            setTimeout(() => toast.remove(), 180);
-        }, 3200);
+            setTimeout(() => toast.remove(), TOAST_EXIT_MS);
+        }, TOAST_DURATION_MS);
     }
 
     function renderMarkdown(text) {
@@ -129,7 +146,7 @@ document.addEventListener('DOMContentLoaded', function () {
     /* Auto-resize textarea */
     chatInput.addEventListener('input', () => {
         chatInput.style.height = 'auto';
-        chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + 'px';
+        chatInput.style.height = Math.min(chatInput.scrollHeight, TEXTAREA_MAX_HEIGHT) + 'px';
     });
 
     /* ── Suggestion cards ───────────────────────── */
@@ -223,7 +240,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (response.ok) {
                     uploadModal.classList.remove('is-open');
                     showToast('Tải tài liệu thành công! Đang chuyển sang chế độ RAG…', 'success');
-                    setTimeout(() => window.location.reload(), 1500);
+                    setTimeout(() => window.location.reload(), UPLOAD_RELOAD_DELAY_MS);
                 } else {
                     const err = await response.text();
                     if (uploadStatus) {
@@ -396,7 +413,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             setChatStatus('Đã hoàn tất', 'thinking');
-            setTimeout(() => setChatStatus(''), 900);
+            setTimeout(() => setChatStatus(''), STATUS_CLEAR_DELAY_MS);
 
         } catch (err) {
             typingEl.remove();
@@ -481,7 +498,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     pendingDeleteItem?.remove();
                     showToast('Đã xóa hội thoại', 'success');
                     if (currentSessionId === pendingDeleteId) {
-                        setTimeout(() => { window.location.href = '/'; }, 900);
+                        setTimeout(() => { window.location.href = '/'; }, DELETE_REDIRECT_DELAY_MS);
                     }
                 } else {
                     showToast('Không thể xóa hội thoại', 'danger');
