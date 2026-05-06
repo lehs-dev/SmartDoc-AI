@@ -24,7 +24,7 @@ except ImportError:
 
 VECTOR_DB_BASE_PATH = "vector_store"
 
-DEFAULT_LLM_MODEL = os.getenv("SMARTDOC_LLM_MODEL", "gemma4:e4b")
+DEFAULT_LLM_MODEL = os.getenv("SMARTDOC_LLM_MODEL", "ibm/granite4.1:8b-q8_0")
 DEFAULT_EMBEDDING_MODEL = os.getenv("SMARTDOC_EMBEDDING_MODEL", "nomic-embed-text")
 DEFAULT_VECTOR_DB_KEY = os.getenv("SMARTDOC_VECTOR_DB_KEY", "nomic_v1_db")
 
@@ -558,7 +558,7 @@ def resolve_llm_model(model_name):
 
     raise ValueError(
         f"Model LLM '{model_name}' chưa có trong Ollama local. "
-        "Vui lòng chạy: ollama pull gemma4:e4b"
+        f"Vui lòng chạy: ollama pull {model_name}"
     )
 
 

@@ -2,6 +2,7 @@ from django.db import models
 import os
 
 LLM_MODEL_CHOICES = (
+    ('ibm/granite4.1:8b-q8_0', 'ibm/granite4.1:8b-q8_0'),
     ('gemma4:e4b', 'gemma4:e4b'),
     ('gemma4:e2b', 'gemma4:e2b'),
 )
@@ -47,7 +48,7 @@ class ChatSession(models.Model):
     title = models.CharField(max_length=255, default="New chat")
     mode = models.CharField(max_length=20, choices=MODE_CHOICES, default='general')
     document = models.ForeignKey(Document, on_delete=models.SET_NULL, null=True, blank=True, related_name='chat_sessions')
-    llm_model = models.CharField(max_length=50, choices=LLM_MODEL_CHOICES, default='gemma4:e4b')
+    llm_model = models.CharField(max_length=50, choices=LLM_MODEL_CHOICES, default='ibm/granite4.1:8b-q8_0')
     embedding_model = models.CharField(max_length=64, choices=EMBEDDING_MODEL_CHOICES, blank=True)
     vector_db_key = models.CharField(max_length=32, choices=VECTOR_DB_CHOICES, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
