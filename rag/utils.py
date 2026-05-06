@@ -554,6 +554,7 @@ def resolve_llm_model(model_name):
     installed = set(get_installed_ollama_models())
 
     if model_name in installed:
+        _log_info("LLM model in use: %s", model_name)
         return model_name
 
     raise ValueError(
@@ -848,24 +849,24 @@ def _build_general_prompt(question, chat_history="", memory_summary=""):
     if _RAW_PROMPT:
         if safe_memory:
             return (
-                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
-                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
-                " Tra loi truc tiep, khong dua nhieu phuong an."
+                "Ban la tro ly AI ho tro nguoi dung."
+                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
+                " Tra loi ngan gon, ro rang, dung vao cau hoi."
                 f"\nThong tin da biet: {safe_memory}"
                 f"\nUser: {question}\nAssistant:"
             )
         return (
-            f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
-            f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
-            " Tra loi truc tiep, khong dua nhieu phuong an."
+            "Ban la tro ly AI ho tro nguoi dung."
+            " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
+            " Tra loi ngan gon, ro rang, dung vao cau hoi."
             f"\nUser: {question}\nAssistant:"
         )
 
     prompt_parts = [
-        f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}.",
-        "Neu tom tat hoac lich su co thong tin, hay dung de tra loi truc tiep.",
-        "Neu nguoi dung hoi ten ban, tra loi bang ten cua ban.",
-        "Tra loi truc tiep, khong dua nhieu phuong an.",
+        "Ban la tro ly AI ho tro nguoi dung.",
+        "Neu tom tat hoac lich su co thong tin, hay dung de tra loi dung trong.",
+        "Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI.",
+        "Tra loi ngan gon, ro rang, dung vao cau hoi.",
     ]
 
     if safe_memory:
@@ -885,40 +886,40 @@ def _build_rag_prompt(question, context, chat_history="", memory_summary=""):
     if _RAW_PROMPT:
         if context and safe_memory:
             return (
-                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
-                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
-                " Tra loi truc tiep, khong dua nhieu phuong an."
+                "Ban la tro ly AI ho tro nguoi dung."
+                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
+                " Tra loi ngan gon, ro rang, dung vao cau hoi."
                 f"\n{context}"
                 f"\nThong tin da biet: {safe_memory}"
                 f"\nUser: {question}\nAssistant:"
             )
         if context:
             return (
-                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
-                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
-                " Tra loi truc tiep, khong dua nhieu phuong an."
+                "Ban la tro ly AI ho tro nguoi dung."
+                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
+                " Tra loi ngan gon, ro rang, dung vao cau hoi."
                 f"\n{context}\nUser: {question}\nAssistant:"
             )
         if safe_memory:
             return (
-                f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
-                f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
-                " Tra loi truc tiep, khong dua nhieu phuong an."
+                "Ban la tro ly AI ho tro nguoi dung."
+                " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
+                " Tra loi ngan gon, ro rang, dung vao cau hoi."
                 f"\nThong tin da biet: {safe_memory}"
                 f"\nUser: {question}\nAssistant:"
             )
         return (
-            f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}."
-            f" Neu hoi ten, tra loi: {ASSISTANT_NAME}."
-            " Tra loi truc tiep, khong dua nhieu phuong an."
+            "Ban la tro ly AI ho tro nguoi dung."
+            " Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI."
+            " Tra loi ngan gon, ro rang, dung vao cau hoi."
             f"\nUser: {question}\nAssistant:"
         )
 
     prompt_parts = [
-        f"Ban la tro ly SmartDoc AI, ten ban la {ASSISTANT_NAME}.",
-        "Uu tien ngu canh tai lieu; neu tom tat/lich su co thong tin lien quan thi dung.",
-        "Neu nguoi dung hoi ten ban, tra loi bang ten cua ban.",
-        "Tra loi truc tiep, khong dua nhieu phuong an.",
+        "Ban la tro ly AI ho tro nguoi dung.",
+        "Uu tien ngu canh tai lieu neu co; neu khong du thong tin thi noi ro.",
+        "Neu nguoi dung hoi ve danh tinh, chi can tra loi: Ban la tro ly AI.",
+        "Tra loi ngan gon, ro rang, dung vao cau hoi.",
     ]
 
     if safe_memory:
