@@ -18,10 +18,6 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
 
-@router.get("/ping")
-async def ping(db: Session = Depends(get_db)):
-    return {"status": "success", "message": "Backend FastAPI đã lên sóng!"}
-
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...), 
@@ -56,7 +52,7 @@ async def chat_with_ai(
     db.add(user_msg)
     db.commit()
 
-    # 2. RÚT GỌN LỊCH SỬ CHAT (Chỉ lấy 4 câu gần nhất để LLM không bị ngộp & lặp từ)
+    # 2. RÚT GỌN LỊCH SỬ CHAT (Chỉ lấy 4 câu gần nhất)
     history_records = db.query(ChatMessage).filter(ChatMessage.session_id == req.session_id).order_by(ChatMessage.created_at.desc()).limit(4).all()
     history_records.reverse()
 
@@ -75,15 +71,17 @@ async def chat_with_ai(
     # 5. LẤY LONG-TERM MEMORY
     long_term_facts = build_memory_context(req.session_id, db)
 
-    # 6. ÉP SYSTEM PROMPT (Thần chú chống lặp lại)
+    # 6. ÉP SYSTEM PROMPT (Thần chú chống lặp lại và ÉP dùng Tiếng Việt)
     system_prompt = (
-        "Bạn là SmartDoc AI. Trả lời ĐÚNG trọng tâm câu hỏi mới nhất.\n"
+        "Bạn là SmartDoc AI, một trợ lý ảo chuyên nghiệp.\n"
+        "QUY TẮC TỐI THƯỢNG: LUÔN LUÔN trả lời 100% bằng Tiếng Việt trong mọi tình huống. KHÔNG BAO GIỜ sử dụng tiếng Trung Quốc hay bất kỳ ngôn ngữ nào khác.\n"
+        "Trả lời ĐÚNG trọng tâm câu hỏi mới nhất.\n"
         "TUYỆT ĐỐI KHÔNG lặp lại những thông tin đã trả lời ở câu trước.\n"
         f"👤 [GHI NHỚ USER]: {long_term_facts}\n"
     )
     
     if context:
-        system_prompt += f"\n📄 [TÀI LIỆU (Trả lời bằng tiếng Việt)]: Dựa vào dữ liệu sau để trả lời (KHÔNG BỊA RA THÔNG TIN):\n{context}\n"
+        system_prompt += f"\n📄 [TÀI LIỆU]: Dựa vào dữ liệu sau để trả lời (KHÔNG BỊA RA THÔNG TIN):\n{context}\n"
 
     ROLE_MAP = {"user": "user", "ai": "assistant", "assistant": "assistant"}
     messages = [{"role": "system", "content": system_prompt}]

@@ -6,48 +6,19 @@
 }
 
 body {
-    background-color: #f0f4f9; /* Màu nền xám xanh nhạt đặc trưng của Gemini */
+    background-color: #f6f8fc;
     color: #1f1f1f;
-    display: flex;
     height: 100vh;
-    overflow: hidden;
-}
-
-/* Sidebar */
-.sidebar {
-    width: 68px;
-    background-color: #f0f4f9;
-    display: flex;
+    overflow: hidden; /* Cấm cuộn toàn trang */
+    display: flex; 
     flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 0;
 }
 
-.icon-btn {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    color: #444746;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.2s;
-}
-
-.icon-btn:hover { background-color: #e1e5ea; }
-.top-actions, .bottom-actions { display: flex; flex-direction: column; gap: 8px; }
-
-/* Main Content */
 .main-content {
     flex: 1;
     display: flex;
     flex-direction: column;
-    position: relative;
-    background-color: #f0f4f9;
+    overflow: hidden;
 }
 
 /* Header */
@@ -56,134 +27,93 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 24px;
+    flex-shrink: 0;
 }
 
-.logo { font-size: 1.2rem; font-weight: 500; color: #444746; }
-.header-right { display: flex; align-items: center; gap: 12px; }
-.pro-badge {
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 4px 8px;
-    border-radius: 8px;
-    background: #e3e3e3;
-    color: #1f1f1f;
-}
-.user-avatar {
-    width: 36px; height: 36px;
-    border-radius: 50%;
-    background: linear-gradient(135deg, #1a73e8, #8ab4f8);
-    color: white;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 600;
+.logo { 
+    font-size: 1.3rem; 
+    font-weight: 600; 
+    color: #1a73e8; 
+    letter-spacing: -0.5px;
 }
 
-/* Welcome Screen */
-.welcome-screen {
+.new-chat-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #fff;
+    border: 1px solid #dadce0;
+    padding: 8px 16px;
+    border-radius: 24px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #3c4043;
+    transition: background 0.2s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.new-chat-btn:hover { 
+    background: #f8f9fa; 
+    color: #1a73e8;
+}
+
+/* Wrapper bọc chat & input */
+.chat-wrapper {
     flex: 1;
     display: flex;
     flex-direction: column;
-    justify-content: center;
     align-items: center;
-    transition: opacity 0.3s ease;
-}
-
-.greeting {
-    font-size: 2.5rem;
-    font-weight: 500;
-    background: -webkit-linear-gradient(45deg, #4285f4, #d96570, #9b72cb);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 8px;
-}
-
-.sub-greeting {
-    font-size: 2.5rem;
-    font-weight: 500;
-    color: #444746;
-    margin-bottom: 40px;
-}
-
-/* Chips */
-.suggestion-chips { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-.chip {
-    padding: 12px 16px;
-    border-radius: 20px;
-    border: 1px solid #e0e0e0;
-    background: #fff;
-    cursor: pointer;
-    font-size: 0.9rem;
-    color: #1f1f1f;
-    display: flex; align-items: center; gap: 8px;
-    transition: background 0.2s;
-}
-.chip:hover { background: #f0f4f9; }
-.chip span { font-size: 1.2rem; color: #4285f4; }
-
-/* Chat History (Nơi hiển thị tin nhắn) */
-.chat-history {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px;
-    display: none; /* Ẩn lúc đầu */
-    flex-direction: column;
-    gap: 30px;
-    max-width: 850px;
+    justify-content: center; /* Căn giữa tuyệt đối lúc chưa chat */
     width: 100%;
-    margin: 0 auto;
+    overflow: hidden;
 }
 
-/* Khi có class is-chatting trên body -> Ẩn màn chào, Hiện chat, Đẩy ô input xuống */
-body.is-chatting .welcome-screen { display: none; }
+body.is-chatting .chat-wrapper {
+    justify-content: flex-end; /* Đẩy ô nhập liệu xuống đáy khi đang chat */
+}
+
+/* Lịch sử chat (Thanh cuộn nằm ở đây) */
+.chat-history {
+    width: 100%;
+    max-width: 800px;
+    flex: 1; /* Chiếm toàn bộ không gian trống */
+    overflow-y: auto; /* Bật thanh cuộn cho phần chat */
+    padding: 24px 24px 0 24px;
+    display: none;
+    flex-direction: column;
+    gap: 24px;
+    scroll-behavior: smooth;
+}
+
 body.is-chatting .chat-history { display: flex; }
-body.is-chatting .suggestion-chips { display: none; }
 
-/* Bong bóng Chat */
-.message { display: flex; gap: 16px; }
-.user-message { flex-direction: row-reverse; }
-.user-message .content {
-    background: #e3e3e3;
-    color: #1f1f1f;
-    padding: 12px 20px;
-    border-radius: 24px;
-    max-width: 70%;
-}
-.ai-message .avatar {
-    width: 36px; height: 36px; border-radius: 50%;
-    background: url('https://www.gstatic.com/lamda/images/sparkle_resting_v2_darkmode_2bdb7df2724e450073ede.gif') center/cover;
-}
-.ai-message .content {
-    color: #1f1f1f;
-    line-height: 1.6;
-    max-width: 85%;
-    padding-top: 6px;
-}
-.ai-message .content p { margin-bottom: 12px; }
-.ai-message .content pre {
-    background: #1e1e1e; padding: 16px; border-radius: 12px;
-    overflow-x: auto; margin: 12px 0; color: #fff;
-}
+/* Làm đẹp thanh cuộn */
+.chat-history::-webkit-scrollbar { width: 6px; }
+.chat-history::-webkit-scrollbar-thumb { background-color: #dadce0; border-radius: 10px; }
 
-/* KHU VỰC NHẬP LIỆU BỌC TRONG "VIÊN NANG" */
+/* Khu vực nhập liệu */
 .input-container {
     width: 100%;
-    max-width: 850px;
-    margin: 0 auto;
+    max-width: 800px;
     padding: 20px;
+    flex-shrink: 0; /* Không bao giờ bị ép nhỏ */
 }
 
 .input-box {
     background: #fff;
-    border-radius: 32px; /* Bo cong nhiều giống Gemini */
-    padding: 16px;
+    border-radius: 24px;
+    padding: 12px 16px;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.04);
     border: 1px solid #e0e0e0;
-    transition: box-shadow 0.2s;
+    transition: box-shadow 0.2s, border 0.2s;
 }
 
 .input-box:focus-within {
-    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border-color: #c7d0d9;
 }
 
 textarea {
@@ -191,68 +121,95 @@ textarea {
     border: none;
     outline: none;
     resize: none;
-    font-size: 1.05rem;
-    padding: 8px;
+    font-size: 1rem;
+    padding: 8px 4px;
     background: transparent;
     color: #1f1f1f;
     max-height: 200px;
+    line-height: 1.5;
+    overflow-y: auto;
 }
 
-textarea::placeholder { color: #757575; }
+textarea::placeholder { color: #8e959b; }
 
-/* Thanh Toolbar bên trong Input Box */
 .input-toolbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 8px;
+    margin-top: 6px;
 }
 
-.toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 4px; }
-
-.text-btn {
-    border: none; background: transparent; color: #444746;
-    font-size: 0.85rem; font-weight: 500; cursor: pointer;
-    display: flex; align-items: center; gap: 4px;
-    padding: 8px 12px; border-radius: 16px; transition: 0.2s;
-}
-.text-btn:hover { background: #f0f4f9; }
-
-.send-btn {
-    background: #f0f4f9;
-    color: #444746;
-    margin-left: 8px;
-}
-.send-btn.active {
-    background: #1f1f1f;
-    color: #fff;
+.icon-btn {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    border: none; background: transparent;
+    cursor: pointer; color: #5f6368;
+    display: flex; align-items: center; justify-content: center;
+    transition: background-color 0.2s;
 }
 
-/* Khu vực Preview File (Bên trong Input Box, trên textarea) */
-.file-preview-area {
-    padding: 0 8px 12px 8px;
-}
+.icon-btn:hover { background-color: #f1f3f4; }
 
+/* Nút gửi */
+.send-btn { color: #c4c7c5; }
+.send-btn.active { 
+    background-color: #1a73e8; 
+    color: #fff; 
+    cursor: pointer; 
+}
+.send-btn.active:hover { background-color: #1557b0; }
+.send-btn:disabled { cursor: not-allowed; background: transparent; }
+
+/* Hiển thị File */
+.file-preview-area { padding: 4px 4px 12px 4px; }
 .file-card {
-    display: inline-flex;
-    align-items: center;
-    background: #e9eef6;
-    padding: 12px 16px;
-    border-radius: 16px;
-    gap: 16px;
+    display: inline-flex; align-items: center;
+    background: #f1f3f4; padding: 10px 14px;
+    border-radius: 12px; gap: 12px; border: 1px solid #e8eaed;
 }
-
 .file-info { display: flex; flex-direction: column; }
-.file-name { font-size: 0.9rem; font-weight: 500; color: #1f1f1f; }
-.file-ext { font-size: 0.75rem; color: #00639b; font-weight: 600; margin-top: 4px; }
-
+.file-name { font-size: 0.85rem; font-weight: 500; color: #202124; }
+.file-ext { font-size: 0.7rem; color: #1a73e8; font-weight: 700; margin-top: 2px;}
 .remove-file-btn {
     background: transparent; border: none; cursor: pointer;
-    color: #444746; display: flex; align-items: center;
+    color: #5f6368; display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 50%;
 }
-.remove-file-btn:hover { color: #1f1f1f; }
+.remove-file-btn:hover { background: #e8eaed; color: #202124; }
+
+/* Bong bóng Chat */
+.message { display: flex; gap: 16px; }
+.user-message { flex-direction: row-reverse; }
+
+.user-message .content {
+    background: #f1f3f4; 
+    color: #1f1f1f;
+    padding: 14px 20px; 
+    border-radius: 24px 24px 4px 24px; 
+    max-width: 75%;
+    font-size: 0.95rem;
+}
+
+.ai-message .avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, #1a73e8, #4285f4); 
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: bold; font-size: 1.2rem;
+}
+.ai-message .avatar::after { content: "✨"; font-size: 0.9rem; } 
+
+.ai-message .content {
+    color: #1f1f1f; line-height: 1.6; max-width: 85%; font-size: 0.95rem;
+    padding-top: 4px;
+}
+.ai-message .content p { margin-bottom: 12px; }
+.ai-message .content pre {
+    background: #1e1e1e; padding: 16px; border-radius: 12px;
+    overflow-x: auto; margin: 12px 0; color: #fff; font-size: 0.85rem;
+}
 
 .footer-text {
-    text-align: center; font-size: 0.75rem; color: #444746;
-    margin-top: 12px;
+    text-align: center; font-size: 0.75rem; color: #8e959b;
+    margin-top: 14px;
 }
